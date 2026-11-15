@@ -35,6 +35,9 @@ from net51tnc_protocol import (
     parse_aprs_packet,
     parse_weather_telemetry,
     compute_station_freshness,
+    aprs_coord_to_decimal,
+    haversine_km,
+    bearing_deg,
     ConnectionState,
     ConfigSyncState,
     StationFreshness,
@@ -57,6 +60,7 @@ logging.basicConfig(
 logger = logging.getLogger("web51tnc")
 
 MAX_HEARD_STATIONS = int(os.environ.get("MAX_HEARD_STATIONS", "500"))
+MAX_LONGEST_STATIONS = int(os.environ.get("MAX_LONGEST_STATIONS", "50"))
 MAX_STATION_AGE_SEC = int(
     os.environ.get("MAX_STATION_AGE_SEC", "7200")
 )  # 2 hours live map retention
@@ -232,6 +236,7 @@ class TNCManager:
         self.listen_task: Optional[asyncio.Task] = None
         self.active_websockets: List[WebSocket] = []
         self.heard_stations: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self.longest_stations: Dict[str, Dict[str, Any]] = {}
         self.last_config: Optional[Dict[str, Any]] = None
         self.raw_template: Optional[bytes] = None
         self.backup_dir: str = os.environ.get("WEB51TNC_BACKUP_DIR", DEFAULT_BACKUP_DIR)
@@ -583,6 +588,138 @@ class TNCManager:
         except (OSError, ValueError) as ex:
             logger.debug("Could not restore persisted stations: %s", ex)
 
+        try:
+            longest_path = self._longest_stations_path()
+            if os.path.isfile(longest_path):
+                with open(longest_path, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+                if isinstance(items, list):
+                    for entry in items:
+                        if not isinstance(entry, dict):
+                            continue
+                        call = entry.get("callsign", "")
+                        dist = entry.get("max_distance_km")
+                        if not call or dist is None:
+                            continue
+                        key = f"{call}|{'IS' if entry.get('is_server') else 'RF'}"
+                        self.longest_stations[key] = entry
+        except (OSError, ValueError) as ex:
+            logger.debug("Could not restore longest stations history: %s", ex)
+
+    def _longest_stations_path(self) -> str:
+        return os.path.join(self.backup_dir, "longest_stations.json")
+
+    def _get_gateway_coords(self) -> Optional[tuple[float, float]]:
+        if not self.last_config:
+            return None
+        lat = aprs_coord_to_decimal(
+            self.last_config.get("gateway_lat", ""), is_lon=False
+        )
+        lon = aprs_coord_to_decimal(
+            self.last_config.get("gateway_lon", ""), is_lon=True
+        )
+        if lat is None or lon is None:
+            return None
+        return (lat, lon)
+
+    def _enrich_station_distance(
+        self,
+        station: Dict[str, Any],
+        gw_coords: Optional[tuple[float, float]] = None,
+    ) -> None:
+        if gw_coords is None:
+            gw_coords = self._get_gateway_coords()
+        if gw_coords is None:
+            return
+        lat = station.get("lat")
+        lon = station.get("lon")
+        if lat is None or lon is None:
+            return
+        station["distance_km"] = haversine_km(
+            gw_coords[0], gw_coords[1], float(lat), float(lon)
+        )
+        station["bearing_deg"] = bearing_deg(
+            gw_coords[0], gw_coords[1], float(lat), float(lon)
+        )
+
+    def _save_longest_stations(self) -> None:
+        """Persists Hall of Fame longest-distance stations to backup_dir only on record updates."""
+        try:
+            os.makedirs(self.backup_dir, exist_ok=True)
+            with open(self._longest_stations_path(), "w", encoding="utf-8") as f:
+                json.dump(self.get_longest_stations(), f, indent=2)
+        except OSError as ex:
+            logger.warning("Failed to persist longest_stations.json: %s", ex)
+
+    def _record_longest_station(
+        self,
+        src: str,
+        packet: Dict[str, Any],
+        station: Dict[str, Any],
+        dist_km: float,
+        bearing: int,
+        now_iso: str,
+    ) -> bool:
+        """Updates Hall of Fame if this packet sets a new distance record for the station."""
+        is_server = bool(packet.get("is_server", False))
+        local_call = (self.last_config or {}).get("callsign", "").strip().upper()
+        if local_call and src.split("-")[0].upper() == local_call and dist_km < 0.05:
+            return False
+
+        key = f"{src}|{'IS' if is_server else 'RF'}"
+        existing = self.longest_stations.get(key)
+        if existing and dist_km <= float(existing.get("max_distance_km", -1.0)):
+            return False
+
+        entry = {
+            "callsign": src,
+            "max_distance_km": dist_km,
+            "bearing_deg": bearing,
+            "lat": packet.get("lat"),
+            "lon": packet.get("lon"),
+            "is_server": is_server,
+            "path": packet.get("path") or station.get("path", ""),
+            "comment": packet.get("comment") or station.get("comment", ""),
+            "symbol_table": packet.get(
+                "symbol_table", station.get("symbol_table", "/")
+            ),
+            "symbol_code": packet.get("symbol_code", station.get("symbol_code", "")),
+            "recorded_at": now_iso,
+        }
+        self.longest_stations[key] = entry
+
+        # Cap RF and IS buckets separately so APRS-IS traffic cannot evict RF DX records
+        rf_items = sorted(
+            (
+                (k, v)
+                for k, v in self.longest_stations.items()
+                if not v.get("is_server")
+            ),
+            key=lambda kv: float(kv[1].get("max_distance_km", 0.0)),
+            reverse=True,
+        )[:MAX_LONGEST_STATIONS]
+        is_items = sorted(
+            ((k, v) for k, v in self.longest_stations.items() if v.get("is_server")),
+            key=lambda kv: float(kv[1].get("max_distance_km", 0.0)),
+            reverse=True,
+        )[:MAX_LONGEST_STATIONS]
+
+        new_map = dict(rf_items + is_items)
+        kept = key in new_map
+        self.longest_stations = new_map
+        if kept:
+            self._save_longest_stations()
+        return kept
+
+    def get_longest_stations(self, rf_only: bool = False) -> List[Dict[str, Any]]:
+        items = [
+            v
+            for v in self.longest_stations.values()
+            if not (rf_only and v.get("is_server"))
+        ]
+        items.sort(key=lambda s: float(s.get("max_distance_km", 0.0)), reverse=True)
+        return items
+
     def _safekeep_eeprom(self, raw_512: bytes, parsed_config: Dict[str, Any]):
         """
         Safekeeps the raw 512-byte EEPROM binary and parsed JSON to disk:
@@ -748,6 +885,32 @@ class TNCManager:
                             if local_call and src.split("-")[0] == local_call:
                                 self.latest_weather = packet["weather"]
 
+                        gw_coords = self._get_gateway_coords()
+                        self._enrich_station_distance(station, gw_coords)
+                        hof_updated = False
+                        if (
+                            gw_coords is not None
+                            and packet.get("lat") is not None
+                            and packet.get("lon") is not None
+                        ):
+                            dist_km = haversine_km(
+                                gw_coords[0],
+                                gw_coords[1],
+                                float(packet["lat"]),
+                                float(packet["lon"]),
+                            )
+                            brng = bearing_deg(
+                                gw_coords[0],
+                                gw_coords[1],
+                                float(packet["lat"]),
+                                float(packet["lon"]),
+                            )
+                            packet["distance_km"] = dist_km
+                            packet["bearing_deg"] = brng
+                            hof_updated = self._record_longest_station(
+                                src, packet, station, dist_km, brng, now_iso
+                            )
+
                         self._record_station(src, station)
 
                         await self.broadcast(
@@ -757,6 +920,13 @@ class TNCManager:
                                 "station": station,
                             }
                         )
+                        if hof_updated:
+                            await self.broadcast(
+                                {
+                                    "type": "longest_stations_update",
+                                    "longest_stations": self.get_longest_stations(),
+                                }
+                            )
                     else:
                         # Non-packet raw telemetry / status line from TNC hardware
                         wx_check = (
@@ -1398,11 +1568,13 @@ async def get_stations(freshness: Optional[str] = None, rf_only: bool = False):
     now_dt = datetime.now(timezone.utc)
     if tnc._prune_expired_stations(now_dt):
         tnc._save_heard_stations()
+    gw_coords = tnc._get_gateway_coords()
     result = []
     for s in tnc.heard_stations.values():
         f_state, age_sec = compute_station_freshness(s.get("last_heard"), now_dt)
         s["freshness"] = f_state.value
         s["age_sec"] = round(age_sec, 1)
+        tnc._enrich_station_distance(s, gw_coords)
 
         if rf_only and s.get("is_server"):
             continue
@@ -1420,6 +1592,19 @@ async def clear_stations():
     return {"status": "cleared"}
 
 
+@app.get("/api/stations/longest")
+async def get_longest_stations(rf_only: bool = False):
+    return tnc.get_longest_stations(rf_only=rf_only)
+
+
+@app.delete("/api/stations/longest", dependencies=[Depends(verify_api_token)])
+async def clear_longest_stations():
+    tnc.longest_stations.clear()
+    tnc._save_longest_stations()
+    await tnc.broadcast({"type": "longest_stations_cleared"})
+    return {"status": "cleared"}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -1428,11 +1613,13 @@ async def websocket_endpoint(websocket: WebSocket):
         now_dt = datetime.now(timezone.utc)
         if tnc._prune_expired_stations(now_dt):
             tnc._save_heard_stations()
+        gw_coords = tnc._get_gateway_coords()
         stations = []
         for s in tnc.heard_stations.values():
             f_state, age_sec = compute_station_freshness(s.get("last_heard"), now_dt)
             s["freshness"] = f_state.value
             s["age_sec"] = round(age_sec, 1)
+            tnc._enrich_station_distance(s, gw_coords)
             stations.append(s)
 
         await websocket.send_json(
@@ -1446,6 +1633,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "ip": tnc.ip,
                 "port": tnc.port,
                 "stations": stations,
+                "longest_stations": tnc.get_longest_stations(),
                 "config": tnc.last_config,
                 "status": tnc.latest_status,
                 "weather": tnc.latest_weather,

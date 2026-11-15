@@ -20,6 +20,7 @@ class TestServerStateMachines(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         tnc.heard_stations.clear()
+        tnc.longest_stations.clear()
         tnc.state = ConnectionState.DISCONNECTED
         tnc.connected = False
         tnc.connecting = False
@@ -185,6 +186,78 @@ class TestServerStateMachines(unittest.TestCase):
             self.assertIn("state", data)
             self.assertIn("config_state", data)
             self.assertIn("stations", data)
+            self.assertIn("longest_stations", data)
+
+    def test_station_distance_and_longest_stations_hall_of_fame(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_backup_dir = tnc.backup_dir
+            tnc.backup_dir = tmpdir
+            try:
+                tnc.last_config = {
+                    "callsign": "OH2FXD",
+                    "gateway_lat": "6010.20N",
+                    "gateway_lon": "02456.30E",
+                }
+                now = datetime.now(timezone.utc).isoformat()
+                tnc.heard_stations["OH3TEST-9"] = {
+                    "callsign": "OH3TEST-9",
+                    "last_heard": now,
+                    "packet_count": 1,
+                    "is_server": False,
+                    "lat": 61.4978,
+                    "lon": 23.7610,
+                }
+                res_stations = self.client.get("/api/stations")
+                self.assertEqual(res_stations.status_code, 200)
+                st_list = res_stations.json()
+                self.assertEqual(len(st_list), 1)
+                self.assertIn("distance_km", st_list[0])
+                self.assertGreater(st_list[0]["distance_km"], 155.0)
+                self.assertIn("bearing_deg", st_list[0])
+
+                # Record RF and IS entries in Hall of Fame
+                pkt_rf = {
+                    "source": "OH3TEST-9",
+                    "is_server": False,
+                    "lat": 61.4978,
+                    "lon": 23.7610,
+                    "path": "WIDE1-1",
+                    "comment": "Tampere mobile",
+                }
+                self.assertTrue(
+                    tnc._record_longest_station(
+                        "OH3TEST-9",
+                        pkt_rf,
+                        tnc.heard_stations["OH3TEST-9"],
+                        160.5,
+                        336,
+                        now,
+                    )
+                )
+                # Shorter distance for same RF station should not overwrite
+                self.assertFalse(
+                    tnc._record_longest_station(
+                        "OH3TEST-9",
+                        pkt_rf,
+                        tnc.heard_stations["OH3TEST-9"],
+                        50.0,
+                        336,
+                        now,
+                    )
+                )
+
+                res_hof = self.client.get("/api/stations/longest?rf_only=true")
+                self.assertEqual(res_hof.status_code, 200)
+                hof = res_hof.json()
+                self.assertEqual(len(hof), 1)
+                self.assertEqual(hof[0]["callsign"], "OH3TEST-9")
+                self.assertEqual(hof[0]["max_distance_km"], 160.5)
+
+                res_del = self.client.delete("/api/stations/longest")
+                self.assertEqual(res_del.status_code, 200)
+                self.assertEqual(self.client.get("/api/stations/longest").json(), [])
+            finally:
+                tnc.backup_dir = orig_backup_dir
 
     def test_wifi_status_endpoint(self):
         res = self.client.get("/api/wifi/status")

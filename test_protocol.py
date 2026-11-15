@@ -13,6 +13,9 @@ from net51tnc_protocol import (
     parse_aprs_packet,
     parse_weather_telemetry,
     compute_station_freshness,
+    aprs_coord_to_decimal,
+    haversine_km,
+    bearing_deg,
     StationFreshness,
     StreamFramer,
     StreamFramerState,
@@ -444,6 +447,22 @@ class TestStateMachines(unittest.TestCase):
         self.assertEqual(res2["config_ready"][6:], b"\x42" * 512)
         self.assertEqual(res2["lines"], ["13.8V", "Server is connected"])
         self.assertEqual(framer.state, StreamFramerState.STREAM)
+
+    def test_aprs_coord_to_decimal_and_distance_bearing(self):
+        lat = aprs_coord_to_decimal("6010.20N", is_lon=False)
+        lon = aprs_coord_to_decimal("02456.30E", is_lon=True)
+        self.assertAlmostEqual(lat, 60.17, places=4)
+        self.assertAlmostEqual(lon, 24.93833, places=4)
+        self.assertIsNone(aprs_coord_to_decimal("9999.99N", is_lon=False))
+        self.assertIsNone(aprs_coord_to_decimal("", is_lon=True))
+
+        # Helsinki (60.17, 24.94) to Tampere (61.50, 23.76) ~ 160 km NNW
+        dist = haversine_km(60.17, 24.93833, 61.4978, 23.7610)
+        brng = bearing_deg(60.17, 24.93833, 61.4978, 23.7610)
+        self.assertGreater(dist, 155.0)
+        self.assertLess(dist, 165.0)
+        self.assertGreater(brng, 320)
+        self.assertLess(brng, 350)
 
 
 if __name__ == "__main__":

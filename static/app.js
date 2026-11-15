@@ -9,6 +9,7 @@ let homeCoords = null;
 let markers = {};
 let polylines = {};
 let heardStations = {};
+let longestStations = [];
 let ws;
 
 const MAX_CONSOLE_LINES = 500;
@@ -486,6 +487,10 @@ function handleWsMessage(msg) {
       if (msg.stations) {
         msg.stations.forEach(updateStation);
       }
+      if (msg.longest_stations) {
+        longestStations = msg.longest_stations;
+        renderLongestStations();
+      }
       if (msg.config) {
         populateConfigForm(msg.config);
       }
@@ -513,9 +518,21 @@ function handleWsMessage(msg) {
       if (msg.station) {
         updateStation(msg.station);
       }
+      updateLastPacketBadge(msg.packet, msg.station);
       if (msg.packet && msg.packet.weather) {
         updateWeatherStatus(msg.packet.weather);
       }
+      break;
+
+    case "longest_stations_update":
+      longestStations = msg.longest_stations || [];
+      renderLongestStations();
+      break;
+
+    case "longest_stations_cleared":
+      longestStations = [];
+      renderLongestStations();
+      showToast("Hall of Fame cleared", "info");
       break;
 
     case "weather":
@@ -674,6 +691,71 @@ function updateWeatherStatus(wx) {
   setEl("wx-rain-24h", `${wx.rain_24h_mm} mm`);
 }
 
+// Distance & Bearing Helpers
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371.0;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+  return Math.round(R * c * 100) / 100;
+}
+
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const dLam = toRad(lon2 - lon1);
+  const y = Math.sin(dLam) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLam);
+  return Math.round((toDeg(Math.atan2(y, x)) + 360) % 360) % 360;
+}
+
+function getStationDistance(stationOrPacket) {
+  if (!stationOrPacket) return null;
+  if (typeof stationOrPacket.distance_km === "number") {
+    return {
+      km: stationOrPacket.distance_km,
+      bearing: typeof stationOrPacket.bearing_deg === "number" ? stationOrPacket.bearing_deg : null,
+    };
+  }
+  if (homeCoords && stationOrPacket.lat !== null && stationOrPacket.lat !== undefined && stationOrPacket.lon !== null && stationOrPacket.lon !== undefined) {
+    const lat = Number(stationOrPacket.lat);
+    const lon = Number(stationOrPacket.lon);
+    if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+      return {
+        km: haversineKm(homeCoords[0], homeCoords[1], lat, lon),
+        bearing: bearingDeg(homeCoords[0], homeCoords[1], lat, lon),
+      };
+    }
+  }
+  return null;
+}
+
+function formatDistanceKm(km) {
+  if (km === null || km === undefined || Number.isNaN(Number(km))) return "—";
+  const val = Number(km);
+  if (val < 1) return `${Math.round(val * 1000)} m`;
+  if (val < 100) return `${val.toFixed(1)} km`;
+  return `${Math.round(val)} km`;
+}
+
+function updateLastPacketBadge(packet, station) {
+  const badge = document.getElementById("last-packet-badge");
+  if (!badge || !packet) return;
+  const src = packet.source || (station && station.callsign) || "";
+  if (!src) return;
+  const dist = getStationDistance(packet) || getStationDistance(station);
+  const srcTag = packet.is_server ? "IS" : "RF";
+  const distText = dist ? ` • ${formatDistanceKm(dist.km)}${dist.bearing !== null ? ` (${dist.bearing}°)` : ""}` : "";
+  badge.textContent = `Last: ${src} [${srcTag}]${distText}`;
+  badge.style.display = "inline-flex";
+}
+
 // Station & Map Management
 function updateStation(station) {
   if (station.last_heard) {
@@ -743,10 +825,16 @@ function updateStation(station) {
       ? '<span class="badge badge-recent">🟡 Recent</span>'
       : '<span class="badge badge-stale">⚪ Stale</span>';
 
+    const distInfo = getStationDistance(station);
+    const distLine = distInfo
+      ? `<b>Distance:</b> ${escapeHtml(formatDistanceKm(distInfo.km))}${distInfo.bearing !== null ? ` (${distInfo.bearing}°)` : ""}<br/>`
+      : "";
+
     markers[call].bindPopup(`
       <strong>${symMeta.icon} ${safeCall}</strong> ${isRf ? '<span class="badge badge-rf">RF</span>' : '<span class="badge badge-is">IS</span>'} ${freshnessTag}<br/>
       <b>Symbol:</b> ${escapeHtml(symMeta.name)} (<code>${escapeHtml(symMeta.combo)}</code>)<br/>
       <b>Coords:</b> ${lat.toFixed(4)}, ${lon.toFixed(4)}<br/>
+      ${distLine}
       <b>Path:</b> ${escapeHtml(station.path || "DIRECT")}<br/>
       <b>Packets:</b> ${Number(station.packet_count || 1)}<br/>
       <b>Comment:</b> ${escapeHtml(station.comment || "N/A")}<br/>
@@ -844,7 +932,7 @@ function renderStationsTable() {
   });
 
   if (stations.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="text-muted text-center">No matching stations heard.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="text-muted text-center">No matching stations heard.</td></tr>';
     return;
   }
 
@@ -855,6 +943,11 @@ function renderStationsTable() {
     const coords = (s.lat !== null && s.lon !== null)
       ? `${Number(s.lat).toFixed(4)}, ${Number(s.lon).toFixed(4)}`
       : '<span class="text-muted">No Position</span>';
+
+    const distInfo = getStationDistance(s);
+    const distCell = distInfo
+      ? `<span class="dist-badge" title="${distInfo.bearing !== null ? `Bearing ${distInfo.bearing}°` : ''}">${escapeHtml(formatDistanceKm(distInfo.km))}</span>${distInfo.bearing !== null ? ` <small class="text-muted">(${distInfo.bearing}°)</small>` : ""}`
+      : '<span class="text-muted">—</span>';
 
     const sourceBadge = s.is_server
       ? '<span class="badge badge-is">IS</span>'
@@ -875,6 +968,7 @@ function renderStationsTable() {
         <td>${freshnessBadge}</td>
         <td>${sourceBadge}</td>
         <td>${coords}</td>
+        <td>${distCell}</td>
         <td>${escapeHtml(timeStr)}</td>
         <td>${Number(s.packet_count || 0)}</td>
         <td><small>${escapeHtml(s.path || "")}</small></td>
@@ -888,6 +982,99 @@ function renderStationsTable() {
       </tr>
     `;
   }
+
+  tbody.innerHTML = html;
+}
+
+function renderLongestStations() {
+  const countEl = document.getElementById("hall-count");
+  if (countEl) countEl.textContent = longestStations.length;
+  const totalEl = document.getElementById("hall-total-count");
+  if (totalEl) totalEl.textContent = longestStations.length;
+
+  const rfList = longestStations.filter((s) => !s.is_server);
+  const isList = longestStations.filter((s) => s.is_server);
+
+  const topRfEl = document.getElementById("hall-top-rf");
+  const topRfSubEl = document.getElementById("hall-top-rf-sub");
+  if (topRfEl && topRfSubEl) {
+    if (rfList.length > 0) {
+      const top = rfList[0];
+      topRfEl.textContent = `${top.callsign} — ${formatDistanceKm(top.max_distance_km)}`;
+      topRfSubEl.textContent = `${top.bearing_deg !== undefined && top.bearing_deg !== null ? `${top.bearing_deg}° • ` : ""}${top.path || "DIRECT"}`;
+    } else {
+      topRfEl.textContent = "—";
+      topRfSubEl.textContent = "No RF records yet";
+    }
+  }
+
+  const topIsEl = document.getElementById("hall-top-is");
+  const topIsSubEl = document.getElementById("hall-top-is-sub");
+  if (topIsEl && topIsSubEl) {
+    if (isList.length > 0) {
+      const top = isList[0];
+      topIsEl.textContent = `${top.callsign} — ${formatDistanceKm(top.max_distance_km)}`;
+      topIsSubEl.textContent = `${top.bearing_deg !== undefined && top.bearing_deg !== null ? `${top.bearing_deg}° • ` : ""}${top.path || "TCPIP"}`;
+    } else {
+      topIsEl.textContent = "—";
+      topIsSubEl.textContent = "No IS records yet";
+    }
+  }
+
+  const tbody = document.getElementById("hall-tbody");
+  if (!tbody) return;
+
+  const filter = ((document.getElementById("hall-filter") || {}).value || "").toLowerCase();
+  const rfOnly = getChk("chk-hall-rf-only", true);
+
+  const filtered = longestStations.filter((s) => {
+    if (rfOnly && s.is_server) return false;
+    if (!filter) return true;
+    return (
+      (s.callsign && s.callsign.toLowerCase().includes(filter)) ||
+      (s.path && s.path.toLowerCase().includes(filter)) ||
+      (s.comment && s.comment.toLowerCase().includes(filter))
+    );
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" class="text-muted text-center">No matching Hall of Fame records.</td></tr>';
+    return;
+  }
+
+  let html = "";
+  filtered.forEach((s, idx) => {
+    const rank = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}`;
+    const sourceBadge = s.is_server
+      ? '<span class="badge badge-is">IS</span>'
+      : '<span class="badge badge-rf">RF</span>';
+    const coords = (s.lat !== null && s.lat !== undefined && s.lon !== null && s.lon !== undefined)
+      ? `${Number(s.lat).toFixed(4)}, ${Number(s.lon).toFixed(4)}`
+      : '<span class="text-muted">—</span>';
+    const bearingStr = s.bearing_deg !== null && s.bearing_deg !== undefined ? `${s.bearing_deg}°` : "—";
+    const symMeta = getAprsSymbolMeta(s.symbol_table || "/", s.symbol_code || "&");
+    const recTime = s.recorded_at ? formatLocalTime(s.recorded_at, true) : "";
+
+    html += `
+      <tr>
+        <td><strong>${rank}</strong></td>
+        <td><span title="${escapeHtml(symMeta.name)} (${escapeHtml(symMeta.combo)})" style="margin-right:5px;">${symMeta.icon}</span><strong>${escapeHtml(s.callsign)}</strong></td>
+        <td>${sourceBadge}</td>
+        <td><span class="dist-badge">${escapeHtml(formatDistanceKm(s.max_distance_km))}</span></td>
+        <td>${escapeHtml(bearingStr)}</td>
+        <td>${coords}</td>
+        <td><small>${escapeHtml(s.path || "")}</small></td>
+        <td>${escapeHtml(s.comment || "")}</td>
+        <td>${escapeHtml(recTime)}</td>
+        <td>
+          <div style="display:flex; gap:4px; align-items:center;">
+            ${s.lat !== null && s.lon !== null ? `<button class="btn btn-secondary btn-sm btn-center-hall" data-lat="${Number(s.lat)}" data-lon="${Number(s.lon)}" data-callsign="${escapeHtml(s.callsign)}">Map</button>` : ""}
+            <a href="https://aprs.fi/#!call=a%2F${encodeURIComponent(s.callsign)}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm" title="View on aprs.fi" style="text-decoration:none; display:inline-flex; align-items:center; font-size:0.75rem;">aprs.fi ↗</a>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
 
   tbody.innerHTML = html;
 }
@@ -932,6 +1119,15 @@ function logPacket(packet) {
   lineDiv.appendChild(timeSpan);
   lineDiv.appendChild(tagSpan);
   lineDiv.appendChild(textSpan);
+
+  const distInfo = getStationDistance(packet) || (packet.source ? getStationDistance(heardStations[packet.source]) : null);
+  if (distInfo) {
+    const distSpan = document.createElement("span");
+    distSpan.className = "console-dist";
+    distSpan.textContent = `📍 ${formatDistanceKm(distInfo.km)}${distInfo.bearing !== null ? ` (${distInfo.bearing}°)` : ""}`;
+    lineDiv.appendChild(distSpan);
+  }
+
   box.appendChild(lineDiv);
   trimConsoleBox(box);
 
@@ -1437,6 +1633,25 @@ function initControls() {
     });
   }
 
+  const hallTbody = document.getElementById("hall-tbody");
+  if (hallTbody) {
+    hallTbody.addEventListener("click", (e) => {
+      const btn = e.target.closest(".btn-center-hall");
+      if (!btn || !map) return;
+      const call = btn.dataset.callsign;
+      if (call && heardStations[call] && heardStations[call].lat !== null) {
+        window.centerStation(call);
+        return;
+      }
+      const lat = parseFloat(btn.dataset.lat);
+      const lon = parseFloat(btn.dataset.lon);
+      if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+        document.querySelector('.tab-btn[data-tab="tab-map"]').click();
+        map.setView([lat, lon], 12);
+      }
+    });
+  }
+
   document.getElementById("btn-connect").addEventListener("click", async () => {
     const ip = document.getElementById("tnc-ip").value.trim();
     const port = parseInt(document.getElementById("tnc-port").value, 10) || 60000;
@@ -1728,6 +1943,24 @@ function initControls() {
   const freshnessSelect = document.getElementById("station-freshness-filter");
   if (freshnessSelect) {
     freshnessSelect.addEventListener("change", renderStationsTable);
+  }
+
+  const hallFilter = document.getElementById("hall-filter");
+  if (hallFilter) {
+    hallFilter.addEventListener("input", renderLongestStations);
+  }
+  const chkHallRfOnly = document.getElementById("chk-hall-rf-only");
+  if (chkHallRfOnly) {
+    chkHallRfOnly.addEventListener("change", renderLongestStations);
+  }
+  const btnClearHall = document.getElementById("btn-clear-hall");
+  if (btnClearHall) {
+    btnClearHall.addEventListener("click", async () => {
+      const confirmed = await showConfirm("Clear all Longest Stations (Hall of Fame) history?", "Clear Hall of Fame");
+      if (confirmed) {
+        await fetch("/api/stations/longest", { method: "DELETE" });
+      }
+    });
   }
 
   const btnCenterHome = document.getElementById("btn-center-home");

@@ -4,6 +4,7 @@ Reverse-engineered from APRS 51TNC SETUP _ENGLISH_20140701.exe (BH4TDV)
 """
 
 import logging
+import math
 import re
 from enum import Enum
 from datetime import datetime, timezone
@@ -895,3 +896,54 @@ def parse_aprs_packet(line: str) -> Optional[Dict[str, Any]]:
             packet["mice"] = True
 
     return packet
+
+
+_APRS_LAT_RE = re.compile(r"^(\d{2})(\d{2}\.\d{2})([NS])$")
+_APRS_LON_RE = re.compile(r"^(\d{3})(\d{2}\.\d{2})([EW])$")
+
+
+def aprs_coord_to_decimal(aprs_str: str, is_lon: bool = False) -> Optional[float]:
+    """Converts an APRS coordinate string (DDMM.MMN or DDDMM.MME) to decimal degrees."""
+    s = (aprs_str or "").strip().upper()
+    m = (_APRS_LON_RE if is_lon else _APRS_LAT_RE).match(s)
+    if not m:
+        return None
+    deg = int(m.group(1))
+    minutes = float(m.group(2))
+    if minutes >= 60.0:
+        return None
+    dec = deg + minutes / 60.0
+    if m.group(3) in ("S", "W"):
+        dec = -dec
+    max_abs = 180.0 if is_lon else 90.0
+    if abs(dec) > max_abs:
+        return None
+    return round(dec, 5)
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Computes great-circle distance in kilometers between two WGS84 coordinates."""
+    r_km = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dphi / 2.0) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    )
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+    return round(r_km * c, 2)
+
+
+def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> int:
+    """Computes initial great-circle bearing in degrees (0-359) from point 1 to point 2."""
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    y = math.sin(dlambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(
+        dlambda
+    )
+    brng = (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+    return int(round(brng)) % 360

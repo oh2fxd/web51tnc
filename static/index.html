@@ -42,6 +42,7 @@
   <nav class="nav-tabs">
     <button class="tab-btn active" data-tab="tab-map">🗺️ Live Map</button>
     <button class="tab-btn" data-tab="tab-stations">📡 Heard Stations (<span id="station-count">0</span>)</button>
+    <button class="tab-btn" data-tab="tab-hall">🏆 Longest Stations (<span id="hall-count">0</span>)</button>
     <button class="tab-btn" data-tab="tab-stream">📜 Live Packet Console</button>
     <button class="tab-btn" data-tab="tab-config">⚙️ iGate Configuration</button>
   </nav>
@@ -72,6 +73,7 @@
             <input type="checkbox" id="chk-show-tracks" checked /> 🧭 Show Tracks
           </label>
           <span id="map-stats" class="badge">0 positioned stations</span>
+          <span id="last-packet-badge" class="badge" style="display:none;" title="Last heard packet and distance from your gateway"></span>
         </div>
       </div>
     </section>
@@ -101,6 +103,7 @@
               <th>Status</th>
               <th>Source</th>
               <th>Coordinates</th>
+              <th>Distance</th>
               <th>Last Heard</th>
               <th>Packets</th>
               <th>Path</th>
@@ -109,7 +112,58 @@
             </tr>
           </thead>
           <tbody id="stations-tbody">
-            <tr><td colspan="9" class="text-muted text-center">No stations heard yet. Connect to NET-51TNC to receive packets.</td></tr>
+            <tr><td colspan="10" class="text-muted text-center">No stations heard yet. Connect to NET-51TNC to receive packets.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 2B: LONGEST STATIONS (HALL OF FAME) -->
+    <section id="tab-hall" class="tab-pane">
+      <div class="hall-summary-grid">
+        <div class="hall-card">
+          <div class="hall-card-label">📻 Longest RF DX</div>
+          <div id="hall-top-rf" class="hall-card-value">—</div>
+          <div id="hall-top-rf-sub" class="hall-card-sub text-muted">No RF records yet</div>
+        </div>
+        <div class="hall-card">
+          <div class="hall-card-label">🌐 Longest APRS-IS</div>
+          <div id="hall-top-is" class="hall-card-value">—</div>
+          <div id="hall-top-is-sub" class="hall-card-sub text-muted">No IS records yet</div>
+        </div>
+        <div class="hall-card">
+          <div class="hall-card-label">🏆 Hall of Fame Records</div>
+          <div id="hall-total-count" class="hall-card-value">0</div>
+          <div class="hall-card-sub text-muted">Persisted across restarts</div>
+        </div>
+      </div>
+      <div class="pane-header">
+        <div style="display:flex; align-items:center; gap:12px; flex:1; flex-wrap:wrap;">
+          <input type="text" id="hall-filter" placeholder="Filter hall of fame by callsign, path, or comment..." class="filter-input" style="max-width:340px;" />
+          <label style="font-size:0.85rem; color:var(--text-muted); display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="chk-hall-rf-only" checked /> 📻 RF DX Only
+          </label>
+        </div>
+        <button id="btn-clear-hall" class="btn btn-danger btn-sm">Clear Hall of Fame</button>
+      </div>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Callsign</th>
+              <th>Source</th>
+              <th>Max Distance</th>
+              <th>Bearing</th>
+              <th>Coordinates</th>
+              <th>Path</th>
+              <th>Comment</th>
+              <th>Recorded</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="hall-tbody">
+            <tr><td colspan="10" class="text-muted text-center">No distance records yet. Set Gateway coordinates and receive positioned packets to build the Hall of Fame.</td></tr>
           </tbody>
         </table>
       </div>
