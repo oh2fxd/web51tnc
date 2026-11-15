@@ -34,6 +34,7 @@
         <span id="header-voltage" class="badge" title="TNC Supply Voltage" style="display:none;">-- V</span>
         <span id="header-server-status" class="badge" title="APRS-IS Server Status" style="display:none;">APRS-IS: --</span>
         <span id="header-tz" class="badge" title="Auto-detected Station Country Timezone">🕒 Local</span>
+        <button id="btn-check-update" type="button" class="btn btn-sm btn-secondary" title="Check for Web51TNC updates from Git">⬆️ Check Update</button>
         <button id="btn-quick-setup" type="button" class="btn btn-sm btn-warning" title="Open Quick Station &amp; Wi-Fi Setup Wizard">⚡ Quick Setup / Wi-Fi</button>
       </div>
     </div>
@@ -56,6 +57,19 @@
         <span id="reboot-countdown-msg">Re-establishing link and synchronizing in 8s</span>
       </div>
       <div class="reboot-progress-bar"><div id="reboot-progress-fill"></div></div>
+    </div>
+
+    <!-- SOFTWARE UPDATE AVAILABLE BANNER -->
+    <div id="update-banner" class="update-banner" style="display:none;">
+      <span class="update-icon">⬆️</span>
+      <div class="update-text">
+        <strong id="update-banner-title">New Web51TNC Update Available</strong>
+        <span id="update-banner-msg"></span>
+      </div>
+      <div class="update-actions">
+        <button type="button" id="btn-apply-update" class="btn btn-primary btn-sm">Update &amp; Restart</button>
+        <button type="button" id="btn-dismiss-update" class="btn btn-secondary btn-sm">Dismiss</button>
+      </div>
     </div>
 
     <!-- TAB 1: LIVE MAP -->

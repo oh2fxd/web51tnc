@@ -259,6 +259,36 @@ class TestServerStateMachines(unittest.TestCase):
             finally:
                 tnc.backup_dir = orig_backup_dir
 
+    def test_system_update_check_endpoint(self):
+        from unittest.mock import patch
+
+        def fake_git(args, timeout=15.0):
+            if args[:2] == ["rev-parse", "--short"] and args[2] == "HEAD":
+                return (0, "abc1234", "")
+            if args[:2] == ["fetch", "origin"]:
+                return (0, "", "")
+            if args[:2] == ["rev-list", "--count"]:
+                return (0, "2", "")
+            if args[:2] == ["rev-parse", "--short"] and args[2] == "origin/main":
+                return (0, "def5678", "")
+            if args[:2] == ["log", "-1"]:
+                return (0, "Add cool feature", "")
+            if args[:2] == ["show", "origin/main:pyproject.toml"]:
+                return (0, 'version = "1.3.0"', "")
+            return (1, "", "unexpected")
+
+        tnc.update_info = None
+        tnc._last_update_check_ts = 0.0
+        with patch.object(tnc, "_run_git_sync", side_effect=fake_git):
+            res = self.client.get("/api/system/update?refresh=true")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data["is_git_repo"])
+        self.assertTrue(data["update_available"])
+        self.assertEqual(data["commits_behind"], 2)
+        self.assertEqual(data["remote_version"], "1.3.0")
+        self.assertEqual(data["remote_commit"], "def5678")
+
     def test_wifi_status_endpoint(self):
         res = self.client.get("/api/wifi/status")
         self.assertEqual(res.status_code, 200)

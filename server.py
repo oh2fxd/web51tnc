@@ -13,6 +13,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 from typing import Dict, Any, List, Optional, Union
 
 from fastapi import (
@@ -61,6 +62,7 @@ logger = logging.getLogger("web51tnc")
 
 MAX_HEARD_STATIONS = int(os.environ.get("MAX_HEARD_STATIONS", "500"))
 MAX_LONGEST_STATIONS = int(os.environ.get("MAX_LONGEST_STATIONS", "50"))
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_STATION_AGE_SEC = int(
     os.environ.get("MAX_STATION_AGE_SEC", "7200")
 )  # 2 hours live map retention
@@ -247,6 +249,8 @@ class TNCManager:
             "server_port": None,
             "server_status": None,
         }
+        self.update_info: Optional[Dict[str, Any]] = None
+        self._last_update_check_ts: float = 0.0
         self._config_event = asyncio.Event()
         self._load_persisted_state()
 
@@ -1086,6 +1090,169 @@ class TNCManager:
             if dead_ws is not None and dead_ws in self.active_websockets:
                 self.active_websockets.remove(dead_ws)
 
+    @staticmethod
+    def _read_version_from_text(text: str) -> str:
+        m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        return m.group(1) if m else "unknown"
+
+    def _get_local_version(self) -> str:
+        try:
+            with open(
+                os.path.join(APP_DIR, "pyproject.toml"), "r", encoding="utf-8"
+            ) as f:
+                return self._read_version_from_text(f.read())
+        except OSError:
+            return "unknown"
+
+    @staticmethod
+    def _run_git_sync(args: List[str], timeout: float = 15.0) -> tuple[int, str, str]:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=APP_DIR,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+    async def check_for_updates(self, force_fetch: bool = False) -> Dict[str, Any]:
+        """Checks git origin/main for newer commits/version without modifying the working tree."""
+        now_ts = asyncio.get_running_loop().time()
+        if (
+            not force_fetch
+            and self.update_info is not None
+            and (now_ts - self._last_update_check_ts) < 300.0
+        ):
+            return self.update_info
+
+        def _check_sync() -> Dict[str, Any]:
+            current_ver = self._get_local_version()
+            if not os.path.isdir(os.path.join(APP_DIR, ".git")):
+                return {
+                    "is_git_repo": False,
+                    "current_version": current_ver,
+                    "update_available": False,
+                    "error": "Not a git repository",
+                }
+            try:
+                rc, local_sha, _ = self._run_git_sync(
+                    ["rev-parse", "--short", "HEAD"], timeout=5.0
+                )
+                if rc != 0:
+                    local_sha = ""
+
+                rc_fetch, _, err_fetch = self._run_git_sync(
+                    ["fetch", "origin", "main", "--quiet"], timeout=15.0
+                )
+                if rc_fetch != 0:
+                    return {
+                        "is_git_repo": True,
+                        "current_version": current_ver,
+                        "current_commit": local_sha,
+                        "update_available": False,
+                        "error": err_fetch or "Failed to fetch origin/main",
+                    }
+
+                rc_cnt, cnt_out, _ = self._run_git_sync(
+                    ["rev-list", "--count", "HEAD..origin/main"], timeout=5.0
+                )
+                behind = int(cnt_out) if rc_cnt == 0 and cnt_out.isdigit() else 0
+
+                _, remote_sha, _ = self._run_git_sync(
+                    ["rev-parse", "--short", "origin/main"], timeout=5.0
+                )
+                _, remote_msg, _ = self._run_git_sync(
+                    ["log", "-1", "--format=%s", "origin/main"], timeout=5.0
+                )
+                rc_pyp, remote_pyp, _ = self._run_git_sync(
+                    ["show", "origin/main:pyproject.toml"], timeout=5.0
+                )
+                remote_ver = (
+                    self._read_version_from_text(remote_pyp)
+                    if rc_pyp == 0
+                    else current_ver
+                )
+
+                return {
+                    "is_git_repo": True,
+                    "current_version": current_ver,
+                    "current_commit": local_sha,
+                    "remote_version": remote_ver,
+                    "remote_commit": remote_sha,
+                    "commits_behind": behind,
+                    "update_available": behind > 0,
+                    "latest_message": remote_msg,
+                }
+            except (subprocess.SubprocessError, OSError) as ex:
+                return {
+                    "is_git_repo": True,
+                    "current_version": current_ver,
+                    "update_available": False,
+                    "error": str(ex),
+                }
+
+        info = await asyncio.to_thread(_check_sync)
+        self.update_info = info
+        self._last_update_check_ts = now_ts
+        return info
+
+    async def apply_git_update(self) -> Dict[str, Any]:
+        """Fast-forward pulls origin/main and schedules a clean process restart."""
+        if not os.path.isdir(os.path.join(APP_DIR, ".git")):
+            raise HTTPException(status_code=400, detail="Not a git repository")
+
+        def _pull_sync() -> tuple[int, str, str]:
+            return self._run_git_sync(
+                ["pull", "--ff-only", "origin", "main"], timeout=30.0
+            )
+
+        try:
+            rc, out, err = await asyncio.to_thread(_pull_sync)
+        except (subprocess.SubprocessError, OSError) as ex:
+            raise HTTPException(status_code=500, detail=f"git pull failed: {ex}")
+
+        if rc != 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"git pull --ff-only failed: {err or out}",
+            )
+
+        already_up_to_date = "Already up to date" in out
+        new_ver = self._get_local_version()
+        if not already_up_to_date:
+            asyncio.create_task(self._restart_after_delay(0.8))
+
+        return {
+            "status": "up_to_date" if already_up_to_date else "updated",
+            "restarting": not already_up_to_date,
+            "version": new_ver,
+            "output": out,
+        }
+
+    async def _restart_after_delay(self, delay_sec: float = 0.8):
+        await asyncio.sleep(delay_sec)
+        await self.disconnect()
+        logger.info("Restarting Web51TNC process after git update...")
+        os.execv(
+            sys.executable,
+            [sys.executable, os.path.abspath(__file__)] + sys.argv[1:],
+        )
+
+    async def auto_update_check_loop(self):
+        """Periodically checks origin/main for updates and notifies connected dashboards."""
+        await asyncio.sleep(15)
+        while True:
+            try:
+                info = await self.check_for_updates(force_fetch=True)
+                if info.get("update_available"):
+                    await self.broadcast({"type": "update_available", "update": info})
+            except asyncio.CancelledError:
+                break
+            except (OSError, subprocess.SubprocessError) as ex:
+                logger.debug("Background update check failed: %s", ex)
+            await asyncio.sleep(21600)  # 6 hours
+
 
 tnc = TNCManager()
 
@@ -1093,8 +1260,10 @@ tnc = TNCManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     reconnect_task = asyncio.create_task(tnc.auto_reconnect_loop())
+    update_task = asyncio.create_task(tnc.auto_update_check_loop())
     yield
     reconnect_task.cancel()
+    update_task.cancel()
     await tnc.disconnect()
 
 
@@ -1605,6 +1774,16 @@ async def clear_longest_stations():
     return {"status": "cleared"}
 
 
+@app.get("/api/system/update")
+async def get_system_update(refresh: bool = False):
+    return await tnc.check_for_updates(force_fetch=refresh)
+
+
+@app.post("/api/system/update", dependencies=[Depends(verify_api_token)])
+async def post_system_update():
+    return await tnc.apply_git_update()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -1637,6 +1816,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "config": tnc.last_config,
                 "status": tnc.latest_status,
                 "weather": tnc.latest_weather,
+                "update": tnc.update_info,
             }
         )
         while True:

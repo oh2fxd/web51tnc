@@ -500,6 +500,13 @@ function handleWsMessage(msg) {
       if (msg.weather) {
         updateWeatherStatus(msg.weather);
       }
+      if (msg.update) {
+        handleUpdateInfo(msg.update);
+      }
+      break;
+
+    case "update_available":
+      handleUpdateInfo(msg.update);
       break;
 
     case "state_change":
@@ -571,6 +578,28 @@ function handleWsMessage(msg) {
       showToast("Station history cleared", "info");
       break;
   }
+}
+
+function handleUpdateInfo(info) {
+  const banner = document.getElementById("update-banner");
+  const titleEl = document.getElementById("update-banner-title");
+  const msgEl = document.getElementById("update-banner-msg");
+  if (!banner || !info) return;
+
+  if (!info.update_available) {
+    banner.style.display = "none";
+    return;
+  }
+
+  const verText = (info.remote_version && info.remote_version !== info.current_version)
+    ? `v${info.current_version} → v${info.remote_version}`
+    : `${info.commits_behind || 1} new commit${info.commits_behind === 1 ? "" : "s"}`;
+  if (titleEl) titleEl.textContent = `New Web51TNC Update Available (${verText})`;
+  if (msgEl) {
+    const sha = info.remote_commit ? `[${info.remote_commit}] ` : "";
+    msgEl.textContent = `${sha}${info.latest_message || "Ready to pull from origin/main"}`;
+  }
+  banner.style.display = "flex";
 }
 
 function updateTncConnectionState(state, ip, port, rebootSeconds = null) {
@@ -1959,6 +1988,73 @@ function initControls() {
       const confirmed = await showConfirm("Clear all Longest Stations (Hall of Fame) history?", "Clear Hall of Fame");
       if (confirmed) {
         await fetch("/api/stations/longest", { method: "DELETE" });
+      }
+    });
+  }
+
+  const btnCheckUpdate = document.getElementById("btn-check-update");
+  if (btnCheckUpdate) {
+    btnCheckUpdate.addEventListener("click", async () => {
+      btnCheckUpdate.disabled = true;
+      const origText = btnCheckUpdate.textContent;
+      btnCheckUpdate.textContent = "⏳ Checking...";
+      try {
+        const res = await fetch("/api/system/update?refresh=true");
+        const info = await res.json();
+        handleUpdateInfo(info);
+        if (info.error) {
+          showToast(`Update check: ${info.error}`, "warning");
+        } else if (info.update_available) {
+          showToast(`Update available (${info.commits_behind} commit${info.commits_behind === 1 ? "" : "s"} behind)`, "info");
+        } else {
+          showToast(`Web51TNC is up to date (v${info.current_version || "?"})`, "success");
+        }
+      } catch (e) {
+        showToast(`Update check failed: ${e.message}`, "error");
+      } finally {
+        btnCheckUpdate.disabled = false;
+        btnCheckUpdate.textContent = origText;
+      }
+    });
+  }
+
+  const btnDismissUpdate = document.getElementById("btn-dismiss-update");
+  if (btnDismissUpdate) {
+    btnDismissUpdate.addEventListener("click", () => {
+      const banner = document.getElementById("update-banner");
+      if (banner) banner.style.display = "none";
+    });
+  }
+
+  const btnApplyUpdate = document.getElementById("btn-apply-update");
+  if (btnApplyUpdate) {
+    btnApplyUpdate.addEventListener("click", async () => {
+      const confirmed = await showConfirm(
+        "Pull the latest version from Git and restart Web51TNC? The dashboard will reconnect automatically in a few seconds.",
+        "Update & Restart Web51TNC"
+      );
+      if (!confirmed) return;
+      btnApplyUpdate.disabled = true;
+      btnApplyUpdate.textContent = "⏳ Updating...";
+      try {
+        const res = await fetch("/api/system/update", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          showToast(`Update failed: ${data.detail || res.statusText}`, "error");
+          btnApplyUpdate.disabled = false;
+          btnApplyUpdate.textContent = "Update & Restart";
+          return;
+        }
+        if (data.restarting) {
+          showToast(`Updated to v${data.version}! Restarting Web51TNC...`, "success");
+        } else {
+          showToast("Already up to date.", "info");
+          handleUpdateInfo({ update_available: false });
+        }
+      } catch (e) {
+        showToast(`Update request failed: ${e.message}`, "error");
+        btnApplyUpdate.disabled = false;
+        btnApplyUpdate.textContent = "Update & Restart";
       }
     });
   }
