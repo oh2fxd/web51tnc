@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web51TNC — APRS iGate &amp; Live Monitor</title>
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="/static/style.css?v=10">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="logo-icon">📻</span>
+      <div>
+        <h1>Web51TNC</h1>
+        <p class="subtitle">NET-51TNC APRS iGate Controller</p>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <div class="conn-box">
+        <label for="tnc-ip">TNC IP:</label>
+        <input type="text" id="tnc-ip" value="192.168.1.120" placeholder="192.168.1.120" />
+        <label for="tnc-port">Port:</label>
+        <input type="number" id="tnc-port" value="60000" style="width: 75px;" />
+        <button id="btn-connect" class="btn btn-primary">Connect</button>
+      </div>
+
+      <div class="status-indicator">
+        <span id="ws-pill" class="ws-badge" title="WebSocket Link to Web51TNC Python Backend">
+          <span id="ws-dot" class="status-dot offline"></span> Server
+        </span>
+        <span id="conn-pill" class="pill pill-disconnected">Disconnected</span>
+        <span id="header-voltage" class="badge" title="TNC Supply Voltage" style="display:none;">-- V</span>
+        <span id="header-server-status" class="badge" title="APRS-IS Server Status" style="display:none;">APRS-IS: --</span>
+        <span id="header-tz" class="badge" title="Auto-detected Station Country Timezone">🕒 Local</span>
+        <button id="btn-quick-setup" type="button" class="btn btn-sm btn-warning" title="Open Quick Station &amp; Wi-Fi Setup Wizard">⚡ Quick Setup / Wi-Fi</button>
+      </div>
+    </div>
+  </header>
+
+  <nav class="nav-tabs">
+    <button class="tab-btn active" data-tab="tab-map">🗺️ Live Map</button>
+    <button class="tab-btn" data-tab="tab-stations">📡 Heard Stations (<span id="station-count">0</span>)</button>
+    <button class="tab-btn" data-tab="tab-stream">📜 Live Packet Console</button>
+    <button class="tab-btn" data-tab="tab-config">⚙️ iGate Configuration</button>
+  </nav>
+
+  <main class="main-content">
+    <!-- REBOOT SUPERVISOR BANNER -->
+    <div id="reboot-banner" class="reboot-banner" style="display:none;">
+      <span class="reboot-icon">⚡</span>
+      <div class="reboot-text">
+        <strong>NET-51TNC Hardware is Restarting...</strong>
+        <span id="reboot-countdown-msg">Re-establishing link and synchronizing in 8s</span>
+      </div>
+      <div class="reboot-progress-bar"><div id="reboot-progress-fill"></div></div>
+    </div>
+
+    <!-- TAB 1: LIVE MAP -->
+    <section id="tab-map" class="tab-pane active">
+      <div class="map-container">
+        <div id="map"></div>
+        <div id="map-pick-banner" class="map-pick-banner" style="display:none;">
+          <span>🎯 <strong>Click your exact station location on the map</strong> to set Gateway coordinates</span>
+          <button type="button" id="btn-cancel-pick-map" class="btn btn-secondary btn-sm">Cancel (Esc)</button>
+        </div>
+        <div class="map-overlay">
+          <button type="button" id="btn-center-home" class="btn btn-primary btn-sm" title="Center map on TNC Gateway coordinates">🏠 My Station</button>
+          <button type="button" id="btn-fit-map" class="btn btn-secondary btn-sm">Fit All Stations</button>
+          <label class="map-toggle-pill" title="Show or hide station movement breadcrumb trails on the map">
+            <input type="checkbox" id="chk-show-tracks" checked /> 🧭 Show Tracks
+          </label>
+          <span id="map-stats" class="badge">0 positioned stations</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: HEARD STATIONS -->
+    <section id="tab-stations" class="tab-pane">
+      <div class="pane-header">
+        <div style="display:flex; align-items:center; gap:12px; flex:1; flex-wrap:wrap;">
+          <input type="text" id="station-filter" placeholder="Filter by callsign, path, or comment..." class="filter-input" style="max-width:320px;" />
+          <select id="station-freshness-filter" class="filter-select">
+            <option value="all">All Freshness</option>
+            <option value="active">🟢 Active (&lt;15m)</option>
+            <option value="recent">🟡 Recent (&lt;60m)</option>
+            <option value="stale">⚪ Stale (&gt;60m)</option>
+          </select>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="chk-rf-only" /> 📻 RF Heard Only
+          </label>
+        </div>
+        <button id="btn-clear-stations" class="btn btn-danger btn-sm">Clear List</button>
+      </div>
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Callsign</th>
+              <th>Status</th>
+              <th>Source</th>
+              <th>Coordinates</th>
+              <th>Last Heard</th>
+              <th>Packets</th>
+              <th>Path</th>
+              <th>Comment</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="stations-tbody">
+            <tr><td colspan="9" class="text-muted text-center">No stations heard yet. Connect to NET-51TNC to receive packets.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAB 3: PACKET STREAM -->
+    <section id="tab-stream" class="tab-pane">
+      <div class="pane-header" style="flex-wrap:wrap; gap:10px;">
+        <div class="stream-controls">
+          <label><input type="checkbox" id="chk-autoscroll" checked /> Auto-scroll</label>
+          <label><input type="checkbox" id="chk-hide-server" /> Hide APRS-IS (#)</label>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center; font-size:0.82rem; color:var(--text-muted);">
+          <span>Supply: <strong id="telemetry-voltage">--</strong></span>
+          <span>Uplink: <strong id="telemetry-server">--</strong></span>
+          <span>Login: <strong id="telemetry-login">--</strong></span>
+        </div>
+        <button id="btn-clear-stream" class="btn btn-secondary btn-sm">Clear Log</button>
+      </div>
+      <div id="packet-console" class="console-box"></div>
+    </section>
+
+    <!-- TAB 4: iGATE CONFIGURATION -->
+    <section id="tab-config" class="tab-pane">
+      <div class="pane-header config-toolbar">
+        <div class="config-toolbar-main">
+          <div class="config-actions">
+            <button type="button" id="btn-read-config" class="btn btn-primary" disabled>🔄 Read EEPROM (#HELLO)</button>
+            <button type="submit" form="config-form" id="btn-write-config" class="btn btn-success" disabled>💾 Save &amp; Restart TNC</button>
+            <button type="button" id="btn-revert-config" class="btn btn-secondary btn-sm" style="display:none;" title="Revert unsaved edits to last read EEPROM state">↺ Revert Changes</button>
+          </div>
+          <div class="config-sync-bar" role="status" aria-live="polite">
+            <span id="config-sync-badge" class="badge badge-sync-unknown">● EEPROM: Unknown</span>
+          </div>
+        </div>
+
+        <div class="config-toolbar-sub">
+          <div class="config-actions">
+            <button type="button" id="btn-export-config" class="btn btn-secondary btn-sm" title="Export configuration to JSON file">⬇ Export JSON</button>
+            <button type="button" id="btn-import-config" class="btn btn-secondary btn-sm" title="Import configuration from JSON file">⬆ Import JSON</button>
+            <button type="button" id="btn-load-initial" class="btn btn-secondary btn-sm" title="Load safekept first EEPROM download from device">🛡️ Restore 1st Read</button>
+            <input type="file" id="file-import-config" accept=".json,application/json" class="visually-hidden" tabindex="-1" />
+            <button type="button" id="btn-cmd-reset" class="btn btn-warning btn-sm" disabled>⚡ Reboot (#RESET)</button>
+            <button type="button" id="btn-cmd-install" class="btn btn-danger btn-sm" disabled>⚠️ Factory Reset (#INSTALL)</button>
+          </div>
+          <div class="beacon-tests">
+            <span class="label">Live TX/IS Tests:</span>
+            <button type="button" id="btn-test-gate-is" class="btn btn-secondary btn-sm" disabled title="Send Gateway beacon to APRS-IS server now">Gate IS</button>
+            <button type="button" id="btn-test-gate-rf" class="btn btn-secondary btn-sm" disabled title="Transmit Gateway beacon over RF radio now">Gate RF</button>
+            <button type="button" id="btn-test-wx-is" class="btn btn-secondary btn-sm" disabled title="Send Weather beacon to APRS-IS server now">WX IS</button>
+            <button type="button" id="btn-test-wx-rf" class="btn btn-secondary btn-sm" disabled title="Transmit Weather beacon over RF radio now">WX RF</button>
+          </div>
+        </div>
+      </div>
+
+      <form id="config-form" action="/api/config" method="POST" aria-labelledby="config-form-heading" novalidate>
+        <h2 id="config-form-heading" class="visually-hidden">NET-51TNC EEPROM Configuration</h2>
+
+        <div class="config-grid">
+          <!-- 1. Station Identity & APRS-IS Login -->
+          <fieldset class="config-card">
+            <legend>📻 Station Identity &amp; APRS-IS Uplink</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-callsign">Station Callsign <span aria-hidden="true">*</span></label>
+                <span id="callsign-hint" class="field-hint">1–6 alphanumeric chars (no SSID)</span>
+                <input
+                  type="text"
+                  id="cfg-callsign"
+                  name="callsign"
+                  maxlength="6"
+                  required
+                  pattern="[A-Za-z0-9]{1,6}"
+                  placeholder="N0CALL"
+                  autocorrect="off"
+                  autocapitalize="characters"
+                  spellcheck="false"
+                  aria-describedby="callsign-hint"
+                  data-error="callsign-error"
+                />
+                <div id="callsign-error" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter a valid 1–6 character amateur callsign (e.g. N0CALL).
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="cfg-ssid">Login SSID</label>
+                <span class="field-hint">10 = iGate</span>
+                <input type="number" id="cfg-ssid" name="ssid" min="0" max="15" value="10" inputmode="numeric" />
+              </div>
+              <div class="form-group">
+                <label for="cfg-passcode">APRS-IS Passcode</label>
+                <span class="field-hint">5-digit hash for login</span>
+                <div class="input-action-row">
+                  <input
+                    type="text"
+                    id="cfg-passcode"
+                    name="passcode"
+                    maxlength="6"
+                    placeholder="21790"
+                    inputmode="numeric"
+                    autocorrect="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                  />
+                  <button type="button" id="btn-calc-passcode" class="btn btn-secondary btn-sm" title="Calculate APRS-IS passcode from Callsign">🔑 Calc</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-server-a">Primary Server A (IPv4)</label>
+                <span id="srv-a-hint" class="field-hint">e.g. 85.188.1.32 (euro.aprs2.net)</span>
+                <input
+                  type="text"
+                  id="cfg-server-a"
+                  name="server_a"
+                  required
+                  pattern="^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
+                  value="85.188.1.32"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  aria-describedby="srv-a-hint"
+                  data-error="srv-a-error"
+                />
+                <div id="srv-a-error" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter a valid IPv4 address (e.g. 85.188.1.32).
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="cfg-server-b">Backup Server B (IPv4)</label>
+                <span class="field-hint">0.0.0.0 if unused</span>
+                <input
+                  type="text"
+                  id="cfg-server-b"
+                  name="server_b"
+                  pattern="^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
+                  value="46.246.122.241"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                />
+              </div>
+              <div class="form-group">
+                <label for="cfg-server-c">Backup Server C (IPv4)</label>
+                <span class="field-hint">0.0.0.0 if unused</span>
+                <input
+                  type="text"
+                  id="cfg-server-c"
+                  name="server_c"
+                  pattern="^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
+                  value="213.186.245.57"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-server-mode">Server Connection Policy</label>
+                <select id="cfg-server-mode" name="server_mode">
+                  <option value="rotate">Rotate Server A / B / C on disconnect</option>
+                  <option value="always_a">Always use Primary Server A</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="cfg-filter">APRS-IS Server Filter</label>
+                <input
+                  type="text"
+                  id="cfg-filter"
+                  name="aprs_filter"
+                  maxlength="64"
+                  placeholder="m/50"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                />
+              </div>
+            </div>
+
+            <div class="checkbox-group">
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-allow-is-rf" name="allow_is_to_rf" />
+                <label for="cfg-allow-is-rf"><strong>Allow APRS-IS → RF forwarding</strong> (TX iGate; uncheck for RX-Only)</label>
+              </div>
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-timeout-restart" name="timeout_restart" checked />
+                <label for="cfg-timeout-restart">Auto-restart TNC if APRS-IS socket is silent for 15 minutes</label>
+              </div>
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-hellocq" name="hellocq_enabled" />
+                <label for="cfg-hellocq">Override with default APRS.HELLOCQ.NET server</label>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- 2. Gateway APRS Beacon -->
+          <fieldset class="config-card">
+            <legend>📍 Gateway Position &amp; APRS Beacon</legend>
+
+            <div class="packet-preview-box">
+              <div class="packet-preview-header">
+                <span>Live APRS Beacon Frame Preview</span>
+                <span id="gw-comment-counter" class="badge">0 / 70 chars</span>
+              </div>
+              <code id="gw-packet-preview">N0CALL-10&gt;APET51,WIDE1-1:!6010.20N/02456.30Er...</code>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-gw-is-sec">APRS-IS Interval (sec)</label>
+                <span class="field-hint">Internet beacon (0 = off)</span>
+                <input type="number" id="cfg-gw-is-sec" name="gateway_beacon_is_sec" min="0" max="65535" value="120" inputmode="numeric" />
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw-rf-sec">RF Radio Interval (sec)</label>
+                <span class="field-hint">Radio TX beacon (0 = off)</span>
+                <input type="number" id="cfg-gw-rf-sec" name="gateway_beacon_rf_sec" min="0" max="65535" value="0" inputmode="numeric" />
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw-ssid">Beacon SSID</label>
+                <span class="field-hint">0–15 (10 = iGate)</span>
+                <input type="number" id="cfg-gw-ssid" name="gateway_ssid" min="0" max="15" value="10" inputmode="numeric" />
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw-path">RF Digipeat Path</label>
+                <span class="field-hint">Used for RF beacons</span>
+                <select id="cfg-gw-path" name="gateway_path">
+                  <option value="- - -">- - - (Direct / No Digi)</option>
+                  <option value="WIDE1-1">WIDE1-1</option>
+                  <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-gw-lat">Latitude (DDMM.MMN/S)</label>
+                <span id="gw-lat-hint" class="field-hint">8 chars, e.g. 6010.20N</span>
+                <input
+                  type="text"
+                  id="cfg-gw-lat"
+                  name="gateway_lat"
+                  maxlength="8"
+                  pattern="^(\d{4}\.\d{2}[NSns])?$"
+                  placeholder="6010.20N"
+                  autocorrect="off"
+                  autocapitalize="characters"
+                  spellcheck="false"
+                  aria-describedby="gw-lat-hint"
+                  data-error="gw-lat-error"
+                />
+                <div id="gw-lat-error" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Use 8-char APRS format DDMM.MMN/S (e.g. 6010.20N).
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw-lon">Longitude (DDDMM.MME/W)</label>
+                <span id="gw-lon-hint" class="field-hint">9 chars, e.g. 02456.30E</span>
+                <input
+                  type="text"
+                  id="cfg-gw-lon"
+                  name="gateway_lon"
+                  maxlength="9"
+                  pattern="^(\d{5}\.\d{2}[EWew])?$"
+                  placeholder="02456.30E"
+                  autocorrect="off"
+                  autocapitalize="characters"
+                  spellcheck="false"
+                  aria-describedby="gw-lon-hint"
+                  data-error="gw-lon-error"
+                />
+                <div id="gw-lon-error" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Use 9-char APRS format DDDMM.MME/W (e.g. 02456.30E).
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="btn-pick-map-coords">Location Tools</label>
+                <span class="field-hint">Pick on map or convert DD.DDDD°</span>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                  <button type="button" id="btn-pick-map-coords" class="btn btn-primary btn-sm" title="Click exact location on the interactive map">📍 Pick from Map</button>
+                  <button type="button" id="btn-toggle-coord-calc" class="btn btn-secondary btn-sm" aria-expanded="false" aria-controls="coord-calc-drawer">🧭 Decimal</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Collapsible Decimal Coordinate Converter -->
+            <div id="coord-calc-drawer" class="coord-calc-drawer" style="display:none;">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="calc-dec-lat">Decimal Latitude (e.g. 60.1700)</label>
+                  <input type="text" id="calc-dec-lat" placeholder="60.1700" inputmode="decimal" autocorrect="off" spellcheck="false" />
+                </div>
+                <div class="form-group">
+                  <label for="calc-dec-lon">Decimal Longitude (e.g. 24.9383)</label>
+                  <input type="text" id="calc-dec-lon" placeholder="24.9383" inputmode="decimal" autocorrect="off" spellcheck="false" />
+                </div>
+                <div class="form-group">
+                  <span class="field-hint">Update APRS Lat/Lon</span>
+                  <button type="button" id="btn-apply-dec-coords" class="btn btn-primary btn-sm">Apply to Gateway</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="aprs-picker-section">
+              <div class="aprs-picker-header">
+                <span class="aprs-picker-title">Choose Station APRS Icon (click an icon to select):</span>
+                <span id="gw-selected-icon-label" class="badge">🗼 Repeater Tower (/r)</span>
+              </div>
+              <div id="gw-icon-picker" class="aprs-icon-grid" role="group" aria-label="Gateway APRS Symbol Picker"></div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-gw-pkt-type">Packet Type</label>
+                <span class="field-hint">Offset 144 (! or =)</span>
+                <select id="cfg-gw-pkt-type" name="gateway_packet_type">
+                  <option value="!">! (Real-time Pos)</option>
+                  <option value="=">= (Pos + Msg)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw-sym-table">Table / Overlay</label>
+                <span class="field-hint">/ or \ or A–Z</span>
+                <input
+                  type="text"
+                  id="cfg-gw-sym-table"
+                  name="gateway_symbol_table"
+                  maxlength="1"
+                  value="/"
+                  class="mono-center-input"
+                  autocorrect="off"
+                  autocapitalize="characters"
+                  spellcheck="false"
+                  title="APRS Symbol Table (/ primary, \ secondary, or A-Z / 0-9 overlay)"
+                />
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw-sym-code">Symbol Code</label>
+                <span class="field-hint">Char (163)</span>
+                <input
+                  type="text"
+                  id="cfg-gw-sym-code"
+                  name="gateway_symbol_code"
+                  maxlength="1"
+                  value="r"
+                  class="mono-center-input"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  title="APRS Symbol Code character (e.g. r Repeater, &amp; iGate, # Digi)"
+                />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-gw-comment">Beacon Comment / PHG / Frequency Text (max 70 chars)</label>
+              <input
+                type="text"
+                id="cfg-gw-comment"
+                name="gateway_comment"
+                maxlength="70"
+              />
+            </div>
+
+            <div class="checkbox-group">
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-gw-voltage" name="gateway_report_voltage" />
+                <label for="cfg-gw-voltage">Append motherboard supply voltage (e.g. <code>13.8V</code>) to beacon comment</label>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- 3. Radio Modem, PTT & Digipeater -->
+          <fieldset class="config-card">
+            <legend>🎙️ Radio Modem, PTT &amp; Digipeater</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-ptt-delay">PTT Pre-TX Delay</label>
+                <span class="field-hint">Key-up preamble</span>
+                <select id="cfg-ptt-delay" name="ptt_delay_code">
+                  <option value="0">250 ms</option>
+                  <option value="1" selected>500 ms (Standard)</option>
+                  <option value="2">750 ms (Handheld HT)</option>
+                  <option value="3">1000 ms</option>
+                  <option value="4">1250 ms</option>
+                  <option value="5">1500 ms</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="cfg-min-tx-interval">Min TX Interval</label>
+                <span class="field-hint">Between packets</span>
+                <select id="cfg-min-tx-interval" name="min_tx_interval_code">
+                  <option value="0">250 ms</option>
+                  <option value="1" selected>500 ms</option>
+                  <option value="2">750 ms</option>
+                  <option value="3">1000 ms</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="cfg-tx-waiting">Digipeat Wait Delay</label>
+                <span class="field-hint">Before re-TX</span>
+                <select id="cfg-tx-waiting" name="tx_waiting_code">
+                  <option value="0">250 ms</option>
+                  <option value="1" selected>500 ms</option>
+                  <option value="2">750 ms</option>
+                  <option value="3">1000 ms</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-tx-level">TX Audio Output Level</label>
+                <select id="cfg-tx-level" name="tx_level">
+                  <option value="YAESU_LOW">YAESU Low (Standard Data / Line Input)</option>
+                  <option value="ICOM_HIGH">ICOM High (Mic Input)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="cfg-baud-mode">IO1 TTL Serial Output Mode</label>
+                <select id="cfg-baud-mode" name="baud_mode">
+                  <option value="Clever 4800">Garmin $GPWPL 4800 (Clever 4800)</option>
+                  <option value="Text 9600">Raw Packet Text 9600</option>
+                  <option value="KISS 9600">KISS TNC 9600</option>
+                  <option value="Clever 9600">Garmin $GPWPL 9600 (Clever 9600)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="checkbox-group">
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-digi-wide1" name="digi_wide1" />
+                <label for="cfg-digi-wide1"><strong>Enable WIDE1-1 Fill-in Digipeater</strong></label>
+              </div>
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-digi-wide2" name="digi_wide2" />
+                <label for="cfg-digi-wide2"><strong>Enable WIDE2 Digipeater</strong> (WIDE2-1 / WIDE2-2)</label>
+              </div>
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-insert-gw" name="insert_gateway_call" />
+                <label for="cfg-insert-gw">Insert station callsign into digipeated path</label>
+              </div>
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-wait-idle" name="wait_channel_idle" checked />
+                <label for="cfg-wait-idle">Wait for idle RF channel before transmitting (CSMA)</label>
+              </div>
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-sql-detect" name="sql_hardware_detect" />
+                <label for="cfg-sql-detect">Hardware SQL pin detection (only if radio squelch pin is wired)</label>
+              </div>
+            </div>
+
+            <div class="info-callout">
+              <p><strong>💡 Audio Level Tuning Tip:</strong> If receiver volume into the 51TNC is too high or squelch is open, the modem cannot decode or key PTT cleanly. Click <em>Gate RF</em> test above and adjust RX volume until <code>TXD</code> keys reliably.</p>
+            </div>
+          </fieldset>
+
+          <!-- 4. Network Settings (Ethernet) -->
+          <fieldset class="config-card">
+            <legend>🌐 Ethernet Network (LAN)</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-ip">TNC Static IPv4 <span aria-hidden="true">*</span></label>
+                <span class="field-hint">Default 192.168.1.120</span>
+                <input
+                  type="text"
+                  id="cfg-ip"
+                  name="ip_address"
+                  required
+                  pattern="^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
+                  value="192.168.1.120"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  data-error="cfg-ip-error"
+                />
+                <div id="cfg-ip-error" class="error-msg">
+                  <span role="img" aria-label="Error">❌</span> Enter a valid IPv4 address.
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="cfg-mask">Subnet Mask <span aria-hidden="true">*</span></label>
+                <span class="field-hint">Default 255.255.255.0</span>
+                <input
+                  type="text"
+                  id="cfg-mask"
+                  name="netmask"
+                  required
+                  pattern="^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
+                  value="255.255.255.0"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                />
+              </div>
+              <div class="form-group">
+                <label for="cfg-gw">Default Gateway <span aria-hidden="true">*</span></label>
+                <span class="field-hint">Router IPv4</span>
+                <input
+                  type="text"
+                  id="cfg-gw"
+                  name="gateway"
+                  required
+                  pattern="^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$"
+                  value="192.168.1.1"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cfg-mac">Hardware MAC Address (Read-Only from EEPROM)</label>
+                <input type="text" id="cfg-mac" name="mac_address" readonly placeholder="00:02:99:02:51:04" class="input-readonly" />
+              </div>
+              <div class="form-group">
+                <label for="cfg-lcd-type">Attached LCD Display Type</label>
+                <select id="cfg-lcd-type" name="lcd_type">
+                  <option value="Close">Close / None Installed</option>
+                  <option value="LCD12864(ST7920)">LCD12864 (ST7920 Monochrome)</option>
+                  <option value="Color 320x240">Color TFT 320x240</option>
+                </select>
+              </div>
+            </div>
+            <div class="checkbox-group">
+              <div class="chk-row">
+                <input type="checkbox" id="cfg-rf-lcd" name="rf_lcd_display" />
+                <label for="cfg-rf-lcd">Mirror decoded RF packets to attached LCD screen</label>
+              </div>
+            </div>
+          </fieldset>
+        </div>
+
+        <!-- 5. Secondary Peripherals (Weather Station & GPS Tracker) -->
+        <details class="advanced-section">
+          <summary>🌦️🛰️ Weather Station &amp; GPS Tracker Peripherals (WS1/WS3, PM2.5, Serial GPS)</summary>
+          <div class="config-grid" style="margin-top: 15px; padding: 0;">
+            <!-- Weather Sensor Board -->
+            <fieldset class="config-card">
+              <legend>🌦️ Weather Station Beacon (WX &amp; PM2.5)</legend>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-wx-is-sec">WX APRS-IS Interval (s)</label>
+                  <span class="field-hint">0 = disabled</span>
+                  <input type="number" id="cfg-wx-is-sec" name="weather_beacon_is_sec" min="0" max="65535" value="0" inputmode="numeric" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-rf-sec">WX RF Interval (s)</label>
+                  <span class="field-hint">0 = disabled</span>
+                  <input type="number" id="cfg-wx-rf-sec" name="weather_beacon_rf_sec" min="0" max="65535" value="0" inputmode="numeric" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-ssid">WX SSID</label>
+                  <span class="field-hint">13 = WX</span>
+                  <input type="number" id="cfg-wx-ssid" name="weather_ssid" min="0" max="15" value="13" inputmode="numeric" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-path">WX Digipeat Path</label>
+                  <span class="field-hint">RF routing</span>
+                  <select id="cfg-wx-path" name="weather_path">
+                    <option value="- - -">- - - (Direct)</option>
+                    <option value="WIDE1-1">WIDE1-1</option>
+                    <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-wx-lat">WX Latitude (DDMM.MMN)</label>
+                  <input type="text" id="cfg-wx-lat" name="weather_lat" maxlength="8" placeholder="6010.20N" autocorrect="off" autocapitalize="characters" spellcheck="false" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-lon">WX Longitude (DDDMM.MME)</label>
+                  <input type="text" id="cfg-wx-lon" name="weather_lon" maxlength="9" placeholder="02456.30E" autocorrect="off" autocapitalize="characters" spellcheck="false" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-pkt-type">Type</label>
+                  <select id="cfg-wx-pkt-type" name="weather_packet_type">
+                    <option value="=">=</option>
+                    <option value="!">!</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-sym-table">Table</label>
+                  <input type="text" id="cfg-wx-sym-table" name="weather_symbol_table" maxlength="1" value="/" class="mono-center-input" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-wx-sym-code">Symbol</label>
+                  <input type="text" id="cfg-wx-sym-code" name="weather_symbol_code" maxlength="1" value="_" class="mono-center-input" />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-wx-comment">Weather Beacon Comment (max 50 chars)</label>
+                <input type="text" id="cfg-wx-comment" name="weather_comment" maxlength="50" placeholder="APRS Weather Station" />
+              </div>
+
+              <div class="checkbox-group">
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-pm25-en" name="pm25_enabled" />
+                  <label for="cfg-pm25-en">Enable PM2.5 air quality sensor on IO2</label>
+                </div>
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-wx-gps-coords" name="weather_use_gps_coords" />
+                  <label for="cfg-wx-gps-coords">Use live GPS coordinates for Weather Beacon</label>
+                </div>
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-wx-voltage" name="weather_report_voltage" />
+                  <label for="cfg-wx-voltage">Append supply voltage in WX beacon</label>
+                </div>
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-wx-lcd-display" name="weather_lcd_display" />
+                  <label for="cfg-wx-lcd-display">Display weather telemetry on LCD</label>
+                </div>
+              </div>
+
+              <div class="wx-telemetry-strip">
+                <span>Wind: <b id="wx-wind-dir">--</b> / <b id="wx-wind-speed">--</b></span>
+                <span>Gust: <b id="wx-wind-gust">--</b></span>
+                <span>Temp: <b id="wx-temp">--</b> / Hum: <b id="wx-humidity">--</b></span>
+                <span>Baro: <b id="wx-pressure">--</b> | Rain: <b id="wx-rain-1h">--</b> / <b id="wx-rain-24h">--</b></span>
+              </div>
+            </fieldset>
+
+            <!-- GPS Tracker Options -->
+            <fieldset class="config-card">
+              <legend>🛰️ GPS Tracker Configuration (IO2 Port)</legend>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-gps-baud">GPS Serial Baud</label>
+                  <select id="cfg-gps-baud" name="gps_baud">
+                    <option value="4800">4800 bps</option>
+                    <option value="9600">9600 bps</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-interval">GPS Interval (sec)</label>
+                  <input type="number" id="cfg-gps-interval" name="gps_beacon_interval" min="0" max="65535" value="0" inputmode="numeric" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-mode">Tracker Mode</label>
+                  <select id="cfg-gps-mode" name="gps_beacon_mode">
+                    <option value="Close">Close / Off</option>
+                    <option value="Timing">Fixed Timing</option>
+                    <option value="SmartBeacon">SmartBeaconing</option>
+                    <option value="Manual_IO2">Manual Button (IO2)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-gps-ssid">GPS SSID</label>
+                  <input type="number" id="cfg-gps-ssid" name="gps_ssid" min="0" max="15" value="9" inputmode="numeric" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-path">GPS Path</label>
+                  <select id="cfg-gps-path" name="gps_path">
+                    <option value="- - -">- - - (Direct)</option>
+                    <option value="WIDE1-1">WIDE1-1</option>
+                    <option value="WIDE1-1,WIDE2-1">WIDE1-1,WIDE2-1</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-pkt-type">Type</label>
+                  <select id="cfg-gps-pkt-type" name="gps_packet_type">
+                    <option value="!">!</option>
+                    <option value="=">=</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-sym-table">Table</label>
+                  <input type="text" id="cfg-gps-sym-table" name="gps_symbol_table" maxlength="1" value="/" class="mono-center-input" />
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-sym-code">Symbol</label>
+                  <input type="text" id="cfg-gps-sym-code" name="gps_symbol_code" maxlength="1" value="#" class="mono-center-input" />
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-gps-lat-val">Lat Offset (sign / 0.01′)</label>
+                  <div class="input-action-row">
+                    <select id="cfg-gps-lat-sign" aria-label="Latitude offset sign" style="width:60px;">
+                      <option value="+">+</option>
+                      <option value="-">-</option>
+                    </select>
+                    <input type="number" id="cfg-gps-lat-val" name="gps_lat_offset" min="0" max="255" value="0" inputmode="numeric" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-gps-lon-val">Lon Offset (sign / 0.01′)</label>
+                  <div class="input-action-row">
+                    <select id="cfg-gps-lon-sign" aria-label="Longitude offset sign" style="width:60px;">
+                      <option value="+">+</option>
+                      <option value="-">-</option>
+                    </select>
+                    <input type="number" id="cfg-gps-lon-val" name="gps_lon_offset" min="0" max="255" value="0" inputmode="numeric" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-gps-custom">GPS Tracker Comment (max 60 chars)</label>
+                <input type="text" id="cfg-gps-custom" name="gps_custom_info" maxlength="60" placeholder="APRS 51TNC GPS Tracker" />
+              </div>
+
+              <div class="checkbox-group">
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-gps-tracks" name="gps_tracks" />
+                  <label for="cfg-gps-tracks">Include speed &amp; course in GPS beacon</label>
+                </div>
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-gps-voltage" name="report_voltage" />
+                  <label for="cfg-gps-voltage">Include supply voltage in GPS comment</label>
+                </div>
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-gps-lcd" name="gps_lcd_display" />
+                  <label for="cfg-gps-lcd">Display live GPS coordinates on LCD</label>
+                </div>
+                <div class="chk-row">
+                  <input type="checkbox" id="cfg-gps-offset-en" name="gps_offset_enabled" />
+                  <label for="cfg-gps-offset-en">Apply coordinate offset to transmitted GPS position</label>
+                </div>
+              </div>
+            </fieldset>
+          </div>
+        </details>
+      </form>
+    </section>
+  </main>
+
+  <!-- Dynamic Toast Notifications -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Accessible Non-blocking Confirmation Modal -->
+  <div id="confirm-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal-box">
+      <h4 id="confirm-modal-title">Confirm Action</h4>
+      <p id="confirm-modal-message">Are you sure?</p>
+      <div class="modal-actions">
+        <button id="confirm-modal-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="confirm-modal-ok" class="btn btn-primary">Proceed</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Setup & Wi-Fi Provisioning Wizard Modal -->
+  <div id="quick-setup-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal-box wizard-modal-box">
+      <div class="wizard-header">
+        <div>
+          <h4>⚡ Quick Station &amp; Wi-Fi Setup</h4>
+          <p class="text-muted" style="margin:0; font-size:0.82rem;">Configure your Callsign, Auto APRS-IS Passcode, SSID (-7, -9, -10), APRS Icon, and RPi Wi-Fi / Hotspot AP.</p>
+        </div>
+        <button id="btn-qs-close" type="button" class="btn btn-sm btn-secondary">✕ Close</button>
+      </div>
+
+      <div class="wizard-grid">
+        <!-- Left Column: Station Identity & Icon -->
+        <div class="wizard-card">
+          <h5>1. Station Identity, SSID Flag &amp; Icon</h5>
+          <div class="form-row">
+            <label for="qs-callsign">Callsign (no SSID):</label>
+            <input type="text" id="qs-callsign" maxlength="6" placeholder="N0CALL" style="text-transform:uppercase; font-weight:700;" />
+          </div>
+          <div class="form-row">
+            <label for="qs-passcode">APRS-IS Passcode (Auto):</label>
+            <div class="input-with-btn">
+              <input type="text" id="qs-passcode" maxlength="5" placeholder="13023" />
+              <span class="badge badge-active" style="white-space:nowrap;">Auto-calculated</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label for="qs-ssid">SSID Role Flag (-7, -9, -10, etc.):</label>
+            <div id="qs-ssid-pills" class="ssid-pill-grid">
+              <button type="button" class="ssid-pill" data-ssid="7" data-table="/" data-code="[">📻 <b>-7</b> Handheld</button>
+              <button type="button" class="ssid-pill" data-ssid="9" data-table="/" data-code=">">🚗 <b>-9</b> Mobile</button>
+              <button type="button" class="ssid-pill" data-ssid="10" data-table="/" data-code="r">📡 <b>-10</b> iGate / Tower</button>
+              <button type="button" class="ssid-pill" data-ssid="13" data-table="/" data-code="_">🌦️ <b>-13</b> Weather</button>
+              <button type="button" class="ssid-pill" data-ssid="5" data-table="/" data-code="-">🏠 <b>-5</b> Home / Other</button>
+              <button type="button" class="ssid-pill" data-ssid="0" data-table="/" data-code="-">🆔 <b>0</b> Base Call</button>
+            </div>
+            <div class="input-with-btn" style="margin-top:6px;">
+              <span class="text-muted" style="font-size:0.8rem;">Custom SSID (0–15):</span>
+              <input type="number" id="qs-ssid" min="0" max="15" value="7" style="max-width:90px;" />
+              <span id="qs-fullcall-preview" class="badge badge-rf" style="font-family:var(--font-mono); font-size:0.85rem;">N0CALL-7</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label>Choose APRS Map Icon:</label>
+            <div id="qs-icon-picker" class="aprs-icon-picker qs-icon-picker-compact"></div>
+          </div>
+
+          <div class="form-row">
+            <label>Station Coordinates (Decimal °):</label>
+            <div class="coord-split">
+              <div>
+                <span class="sub-label">Latitude</span>
+                <input type="number" id="qs-lat" step="0.0001" placeholder="60.1700" />
+              </div>
+              <div>
+                <span class="sub-label">Longitude</span>
+                <input type="number" id="qs-lon" step="0.0001" placeholder="24.9383" />
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:6px;">
+              <button type="button" id="btn-qs-pick-map" class="btn btn-sm btn-warning">📍 Pick on Map</button>
+              <button type="button" id="btn-qs-gps" class="btn btn-sm btn-secondary">🎯 Browser GPS</button>
+            </div>
+          </div>
+
+          <div style="margin-top:12px; display:flex; justify-content:flex-end;">
+            <button type="button" id="btn-qs-save-tnc" class="btn btn-success" style="width:100%; justify-content:center;">💾 Save Callsign, SSID &amp; Icon to TNC</button>
+          </div>
+        </div>
+
+        <!-- Right Column: RPi Wi-Fi & Hotspot AP -->
+        <div class="wizard-card">
+          <h5>2. Raspberry Pi Wi-Fi &amp; Fallback AP</h5>
+          <div id="qs-wifi-status-box" class="info-callout" style="margin-top:0; margin-bottom:12px;">
+            Checking Raspberry Pi Wi-Fi status...
+          </div>
+
+          <div class="form-row">
+            <label for="qs-wifi-list">Available Wi-Fi Networks:</label>
+            <div class="input-with-btn">
+              <select id="qs-wifi-list" class="filter-select" style="flex:1;">
+                <option value="">-- Click Scan to list nearby Wi-Fi --</option>
+              </select>
+              <button type="button" id="btn-qs-wifi-scan" class="btn btn-sm btn-secondary">🔄 Scan</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label for="qs-wifi-ssid">Wi-Fi SSID (Network Name):</label>
+            <input type="text" id="qs-wifi-ssid" placeholder="Enter or select Wi-Fi SSID" />
+          </div>
+
+          <div class="form-row">
+            <label for="qs-wifi-psk">Wi-Fi Password:</label>
+            <input type="password" id="qs-wifi-psk" placeholder="WPA2/WPA3 Password" autocomplete="new-password" />
+          </div>
+
+          <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
+            <button type="button" id="btn-qs-wifi-connect" class="btn btn-primary" style="width:100%; justify-content:center;">📶 Connect RPi to This Wi-Fi</button>
+            <button type="button" id="btn-qs-wifi-ap" class="btn btn-sm btn-secondary" style="width:100%; justify-content:center;">📡 Open Hotspot AP (Web51TNC-Setup / 10.42.0.1)</button>
+          </div>
+
+          <div class="info-callout" style="margin-top:14px; font-size:0.78rem;">
+            <b>Automatic Field AP Fallback:</b> On boot, if your configured Wi-Fi is not found within 45 seconds, the Raspberry Pi automatically opens Wi-Fi Hotspot <code>Web51TNC-Setup</code> (password: <code>web51tnc</code>) at <code>http://10.42.0.1:8000</code> so you can always connect with your phone or laptop!
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/app.js?v=10"></script>
+</body>
+</html>

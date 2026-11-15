@@ -1,0 +1,12 @@
+[Unit]
+Description=Web51TNC Wi-Fi Fallback Access Point Watchdog
+After=NetworkManager.service network.target
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/web51tnc-ap-ctl boot-check
+
+[Install]
+WantedBy=multi-user.target

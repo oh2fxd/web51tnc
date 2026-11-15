@@ -1,0 +1,21 @@
+[Unit]
+Description=Web51TNC APRS Gateway & Controller Daemon
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/web51tnc
+ExecStart=/usr/bin/python3 /home/pi/web51tnc/server.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PORT=8000
+Environment=TNC_IP=192.168.1.120
+Environment=TNC_PORT=60000
+Environment=AUTO_CONNECT=1
+
+[Install]
+WantedBy=multi-user.target
