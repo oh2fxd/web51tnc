@@ -223,8 +223,8 @@ else
 
     if [[ "$ONLINE" == true ]]; then
         apt-get update -qq >/dev/null 2>&1 || log "WARN: apt-get update failed"
-        apt-get install -y --no-install-recommends python3-pip rsync >/dev/null 2>&1 \
-            || log "WARN: python3-pip/rsync install failed"
+        apt-get install -y --no-install-recommends python3-pip rsync git >/dev/null 2>&1 \
+            || log "WARN: python3-pip/rsync/git install failed"
 
         if { sudo -u "$APP_USER" python3 -m pip install --quiet --break-system-packages \
                 -r "$APP_DIR/requirements.txt"; } >>"$STATUS" 2>&1; then
