@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Web51TNC — APRS iGate &amp; Live Monitor</title>
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
-  <link rel="stylesheet" href="/static/style.css?v=10">
+  <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 <body>
   <header class="app-header">
@@ -948,18 +948,20 @@
         <div class="wizard-card">
           <h5>1. Station Identity, SSID Flag &amp; Icon</h5>
           <div class="form-row">
-            <label for="qs-callsign">Callsign (no SSID):</label>
-            <input type="text" id="qs-callsign" maxlength="6" placeholder="N0CALL" style="text-transform:uppercase; font-weight:700;" />
-          </div>
-          <div class="form-row">
-            <label for="qs-passcode">APRS-IS Passcode (Auto):</label>
-            <div class="input-with-btn">
-              <input type="text" id="qs-passcode" maxlength="5" placeholder="13023" />
-              <span class="badge badge-active" style="white-space:nowrap;">Auto-calculated</span>
+            <div class="form-group">
+              <label for="qs-callsign">Callsign (no SSID):</label>
+              <input type="text" id="qs-callsign" maxlength="6" placeholder="N0CALL" style="text-transform:uppercase; font-weight:700;" />
+            </div>
+            <div class="form-group">
+              <label for="qs-passcode">APRS-IS Passcode (Auto):</label>
+              <div class="input-action-row">
+                <input type="text" id="qs-passcode" maxlength="5" placeholder="13023" />
+                <span class="badge badge-active" style="white-space:nowrap; align-self:center;">Auto</span>
+              </div>
             </div>
           </div>
 
-          <div class="form-row">
+          <div class="form-group">
             <label for="qs-ssid">SSID Role Flag (-7, -9, -10, etc.):</label>
             <div id="qs-ssid-pills" class="ssid-pill-grid">
               <button type="button" class="ssid-pill" data-ssid="7" data-table="/" data-code="[">📻 <b>-7</b> Handheld</button>
@@ -969,19 +971,19 @@
               <button type="button" class="ssid-pill" data-ssid="5" data-table="/" data-code="-">🏠 <b>-5</b> Home / Other</button>
               <button type="button" class="ssid-pill" data-ssid="0" data-table="/" data-code="-">🆔 <b>0</b> Base Call</button>
             </div>
-            <div class="input-with-btn" style="margin-top:6px;">
-              <span class="text-muted" style="font-size:0.8rem;">Custom SSID (0–15):</span>
+            <div class="input-action-row" style="margin-top:6px; align-items:center;">
+              <span class="text-muted" style="font-size:0.8rem; white-space:nowrap;">Custom SSID (0–15):</span>
               <input type="number" id="qs-ssid" min="0" max="15" value="7" style="max-width:90px;" />
-              <span id="qs-fullcall-preview" class="badge badge-rf" style="font-family:var(--font-mono); font-size:0.85rem;">N0CALL-7</span>
+              <span id="qs-fullcall-preview" class="badge badge-rf" style="font-family:var(--font-mono); font-size:0.85rem; white-space:nowrap;">N0CALL-7</span>
             </div>
           </div>
 
-          <div class="form-row">
+          <div class="form-group">
             <label>Choose APRS Map Icon:</label>
             <div id="qs-icon-picker" class="aprs-icon-picker qs-icon-picker-compact"></div>
           </div>
 
-          <div class="form-row">
+          <div class="form-group">
             <label>Station Coordinates (Decimal °):</label>
             <div class="coord-split">
               <div>
@@ -993,7 +995,7 @@
                 <input type="number" id="qs-lon" step="0.0001" placeholder="24.9383" />
               </div>
             </div>
-            <div style="display:flex; gap:8px; margin-top:6px;">
+            <div style="display:flex; gap:8px; margin-top:6px; flex-wrap:wrap;">
               <button type="button" id="btn-qs-pick-map" class="btn btn-sm btn-warning">📍 Pick on Map</button>
               <button type="button" id="btn-qs-gps" class="btn btn-sm btn-secondary">🎯 Browser GPS</button>
             </div>
@@ -1011,22 +1013,22 @@
             Checking Raspberry Pi Wi-Fi status...
           </div>
 
-          <div class="form-row">
+          <div class="form-group">
             <label for="qs-wifi-list">Available Wi-Fi Networks:</label>
-            <div class="input-with-btn">
+            <div class="input-action-row">
               <select id="qs-wifi-list" class="filter-select" style="flex:1;">
                 <option value="">-- Click Scan to list nearby Wi-Fi --</option>
               </select>
-              <button type="button" id="btn-qs-wifi-scan" class="btn btn-sm btn-secondary">🔄 Scan</button>
+              <button type="button" id="btn-qs-wifi-scan" class="btn btn-sm btn-secondary" style="white-space:nowrap;">🔄 Scan</button>
             </div>
           </div>
 
-          <div class="form-row">
+          <div class="form-group">
             <label for="qs-wifi-ssid">Wi-Fi SSID (Network Name):</label>
             <input type="text" id="qs-wifi-ssid" placeholder="Enter or select Wi-Fi SSID" />
           </div>
 
-          <div class="form-row">
+          <div class="form-group">
             <label for="qs-wifi-psk">Wi-Fi Password:</label>
             <input type="password" id="qs-wifi-psk" placeholder="WPA2/WPA3 Password" autocomplete="new-password" />
           </div>
