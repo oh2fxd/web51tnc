@@ -265,6 +265,19 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# 5b. Minimize SD card wear: keep systemd-journald logs in RAM
+# ------------------------------------------------------------------------------
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/99-web51tnc-volatile.conf <<'EOF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=32M
+EOF
+systemctl restart systemd-journald >/dev/null 2>&1 || true
+rm -rf /var/log/journal 2>/dev/null || true
+log "journald set to volatile RAM storage (max 32M)"
+
+# ------------------------------------------------------------------------------
 # 6. Final report
 # ------------------------------------------------------------------------------
 step "Result"
