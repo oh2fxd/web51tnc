@@ -1317,6 +1317,70 @@ body {
   gap: 6px;
 }
 
+.wifi-saved-panel {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.wifi-saved-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wifi-saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.wifi-saved-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+}
+
+.wifi-saved-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.wifi-saved-ssid {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.wifi-saved-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.wifi-btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .ssid-pill {
   background-color: var(--bg-input);
   border: 1px solid var(--border-color);

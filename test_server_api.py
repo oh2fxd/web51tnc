@@ -298,6 +298,64 @@ class TestServerStateMachines(unittest.TestCase):
         self.assertEqual(data["ap_ssid"], "Web51TNC-Setup")
         self.assertIn("needs_setup", data)
 
+    def test_wifi_saved_save_delete_test_all(self):
+        from unittest.mock import patch
+
+        with patch(
+            "server._list_saved_wifi_sync",
+            return_value=[
+                {
+                    "name": "HomeWiFi",
+                    "ssid": "HomeWiFi",
+                    "autoconnect": True,
+                    "priority": 200,
+                    "active": True,
+                }
+            ],
+        ):
+            res = self.client.get("/api/wifi/saved")
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(len(res.json()["profiles"]), 1)
+
+        with patch(
+            "server._save_wifi_profile_sync",
+            return_value={
+                "saved": True,
+                "ssid": "FieldNet",
+                "priority": 100,
+                "profiles": [],
+            },
+        ):
+            res = self.client.post(
+                "/api/wifi/save",
+                json={"ssid": "FieldNet", "password": "secret", "priority": 100},
+            )
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["saved"])
+
+        with patch(
+            "server._delete_wifi_profile_sync",
+            return_value={"deleted": "FieldNet", "profiles": []},
+        ):
+            res = self.client.post("/api/wifi/delete", json={"name": "FieldNet"})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["deleted"], "FieldNet")
+
+        with patch(
+            "server._test_all_saved_wifi_sync",
+            return_value={
+                "connected": True,
+                "connected_ssid": "HomeWiFi",
+                "results": [],
+                "wifi": {},
+                "profiles": [],
+            },
+        ):
+            res = self.client.post("/api/wifi/test-all")
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["connected"])
+            self.assertEqual(res.json()["connected_ssid"], "HomeWiFi")
+
 
 if __name__ == "__main__":
     unittest.main()

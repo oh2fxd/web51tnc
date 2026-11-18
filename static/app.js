@@ -2265,6 +2265,89 @@ async function scanWifiNetworks() {
   }
 }
 
+async function refreshSavedWifi() {
+  const listEl = document.getElementById("qs-wifi-saved-list");
+  if (!listEl) return;
+  try {
+    const res = await fetch("/api/wifi/saved");
+    if (!res.ok) return;
+    const data = await res.json();
+    const profiles = data.profiles || [];
+    if (!profiles.length) {
+      listEl.innerHTML = '<div class="text-muted" style="font-size:0.78rem;">No saved Wi-Fi networks yet.</div>';
+      return;
+    }
+    listEl.innerHTML = "";
+    profiles.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "wifi-saved-item";
+
+      const meta = document.createElement("div");
+      meta.className = "wifi-saved-meta";
+      const ssidSpan = document.createElement("span");
+      ssidSpan.className = "wifi-saved-ssid";
+      ssidSpan.textContent = `${p.active ? "🟢 " : "📶 "}${p.ssid || p.name}`;
+      meta.appendChild(ssidSpan);
+
+      const prioBadge = document.createElement("span");
+      prioBadge.className = "badge";
+      prioBadge.textContent = `prio ${p.priority}`;
+      meta.appendChild(prioBadge);
+
+      const actions = document.createElement("div");
+      actions.className = "wifi-saved-actions";
+
+      if (!p.active) {
+        const btnUse = document.createElement("button");
+        btnUse.type = "button";
+        btnUse.className = "btn btn-sm btn-secondary";
+        btnUse.textContent = "Use";
+        btnUse.title = `Select ${p.ssid || p.name}`;
+        btnUse.addEventListener("click", () => {
+          setVal("qs-wifi-ssid", p.ssid || p.name);
+          setVal("qs-wifi-priority", p.priority ?? 150);
+          const pskEl = document.getElementById("qs-wifi-psk");
+          if (pskEl) pskEl.value = "";
+        });
+        actions.appendChild(btnUse);
+      }
+
+      const btnDel = document.createElement("button");
+      btnDel.type = "button";
+      btnDel.className = "btn btn-sm btn-danger";
+      btnDel.textContent = "✕";
+      btnDel.title = `Delete saved profile ${p.name}`;
+      btnDel.addEventListener("click", async () => {
+        const ok = await showConfirm(`Delete saved Wi-Fi profile '${p.name}'?`, "Delete Saved Wi-Fi");
+        if (!ok) return;
+        try {
+          const delRes = await fetch("/api/wifi/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: p.name }),
+          });
+          if (delRes.ok) {
+            showToast(`Deleted Wi-Fi profile '${p.name}'`, "info");
+            await refreshSavedWifi();
+          } else {
+            const err = await delRes.json();
+            showToast(`Delete failed: ${err.detail || delRes.statusText}`, "error");
+          }
+        } catch (err) {
+          showToast(`Delete error: ${err.message}`, "error");
+        }
+      });
+      actions.appendChild(btnDel);
+
+      row.appendChild(meta);
+      row.appendChild(actions);
+      listEl.appendChild(row);
+    });
+  } catch (e) {
+    listEl.innerHTML = '<div class="text-muted" style="font-size:0.78rem;">Saved Wi-Fi list unavailable.</div>';
+  }
+}
+
 function openQuickSetupModal() {
   const modal = document.getElementById("quick-setup-modal");
   if (!modal) return;
@@ -2275,6 +2358,7 @@ function openQuickSetupModal() {
   }
   modal.style.display = "flex";
   refreshWifiStatus(false);
+  refreshSavedWifi();
 }
 
 function initQuickSetupWizard() {
@@ -2452,11 +2536,80 @@ function initQuickSetupWizard() {
     });
   }
 
+  const btnWifiSave = document.getElementById("btn-qs-wifi-save");
+  if (btnWifiSave) {
+    btnWifiSave.addEventListener("click", async () => {
+      const ssid = getVal("qs-wifi-ssid").trim();
+      const password = document.getElementById("qs-wifi-psk")?.value || "";
+      const priority = Math.min(999, Math.max(0, intOrDefault(getVal("qs-wifi-priority", "150"), 150)));
+      if (!ssid) {
+        showToast("Please enter or select a Wi-Fi SSID", "warning");
+        return;
+      }
+      btnWifiSave.disabled = true;
+      btnWifiSave.textContent = "⏳ Saving...";
+      try {
+        const res = await fetch("/api/wifi/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ssid, password, priority }),
+        });
+        if (res.ok) {
+          showToast(`Saved Wi-Fi '${ssid}' (priority ${priority}) without dropping connection`, "success", 5000);
+          await refreshSavedWifi();
+        } else {
+          const err = await res.json();
+          showToast(`Failed to save Wi-Fi: ${err.detail || res.statusText}`, "error", 6000);
+        }
+      } catch (e) {
+        showToast(`Save Wi-Fi error: ${e.message}`, "error");
+      } finally {
+        btnWifiSave.disabled = false;
+        btnWifiSave.textContent = "💾 Save Only (Add)";
+      }
+    });
+  }
+
+  const btnWifiTestAll = document.getElementById("btn-qs-wifi-test-all");
+  if (btnWifiTestAll) {
+    btnWifiTestAll.addEventListener("click", async () => {
+      const confirmed = await showConfirm(
+        "Test all saved Wi-Fi networks in priority order? If the Raspberry Pi switches networks, its IP may change (http://web51tnc.local:8000).",
+        "Test All Saved Wi-Fi"
+      );
+      if (!confirmed) return;
+      btnWifiTestAll.disabled = true;
+      btnWifiTestAll.textContent = "⏳ Testing...";
+      try {
+        const res = await fetch("/api/wifi/test-all", { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.connected) {
+            showToast(`Connected via saved Wi-Fi '${data.connected_ssid}'`, "success", 6000);
+          } else {
+            showToast("No saved Wi-Fi connected — Hotspot AP active (10.42.0.1:8000)", "warning", 7000);
+          }
+          await refreshWifiStatus(false);
+          await refreshSavedWifi();
+        } else {
+          const err = await res.json();
+          showToast(`Test failed: ${err.detail || res.statusText}`, "error", 6000);
+        }
+      } catch (e) {
+        showToast("Wi-Fi switching — reconnect and open http://web51tnc.local:8000", "info", 8000);
+      } finally {
+        btnWifiTestAll.disabled = false;
+        btnWifiTestAll.textContent = "🧪 Test All Saved";
+      }
+    });
+  }
+
   const btnWifiConnect = document.getElementById("btn-qs-wifi-connect");
   if (btnWifiConnect) {
     btnWifiConnect.addEventListener("click", async () => {
       const ssid = getVal("qs-wifi-ssid").trim();
       const password = document.getElementById("qs-wifi-psk")?.value || "";
+      const priority = Math.min(999, Math.max(0, intOrDefault(getVal("qs-wifi-priority", "150"), 150)));
       if (!ssid) {
         showToast("Please select or enter a Wi-Fi SSID", "warning");
         return;
@@ -2473,22 +2626,24 @@ function initQuickSetupWizard() {
         const res = await fetch("/api/wifi/connect", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ssid, password }),
+          body: JSON.stringify({ ssid, password, priority }),
         });
         if (res.ok) {
           const data = await res.json();
           showToast(`Connected to Wi-Fi '${ssid}' (IP: ${data.wifi?.ip || "assigned"})`, "success", 6000);
           await refreshWifiStatus(false);
+          await refreshSavedWifi();
         } else {
           const err = await res.json();
           showToast(`Wi-Fi connection failed: ${err.detail || res.statusText}`, "error", 6000);
           await refreshWifiStatus(false);
+          await refreshSavedWifi();
         }
       } catch (e) {
         showToast("Wi-Fi link switching — reconnect to the new Wi-Fi and open http://web51tnc.local:8000", "info", 8000);
       } finally {
         btnWifiConnect.disabled = false;
-        btnWifiConnect.textContent = "📶 Connect RPi to This Wi-Fi";
+        btnWifiConnect.textContent = "📶 Save & Connect";
       }
     });
   }

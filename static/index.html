@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Web51TNC — APRS iGate &amp; Live Monitor</title>
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
-  <link rel="stylesheet" href="/static/style.css?v=11">
+  <link rel="stylesheet" href="/static/style.css?v=12">
 </head>
 <body>
   <header class="app-header">
@@ -1009,12 +1009,22 @@
         <!-- Right Column: RPi Wi-Fi & Hotspot AP -->
         <div class="wizard-card">
           <h5>2. Raspberry Pi Wi-Fi &amp; Fallback AP</h5>
-          <div id="qs-wifi-status-box" class="info-callout" style="margin-top:0; margin-bottom:12px;">
+          <div id="qs-wifi-status-box" class="info-callout" style="margin-top:0; margin-bottom:0;">
             Checking Raspberry Pi Wi-Fi status...
           </div>
 
+          <div class="wifi-saved-panel">
+            <div class="wifi-saved-header">
+              <span>Saved Wi-Fi Networks</span>
+              <button type="button" id="btn-qs-wifi-test-all" class="btn btn-sm btn-warning" title="Try all saved Wi-Fi networks in priority order">🧪 Test All Saved</button>
+            </div>
+            <div id="qs-wifi-saved-list" class="wifi-saved-list">
+              <div class="text-muted" style="font-size:0.78rem;">Loading saved networks...</div>
+            </div>
+          </div>
+
           <div class="form-group">
-            <label for="qs-wifi-list">Available Wi-Fi Networks:</label>
+            <label for="qs-wifi-list">Scan Nearby Wi-Fi Networks:</label>
             <div class="input-action-row">
               <select id="qs-wifi-list" class="filter-select" style="flex:1;">
                 <option value="">-- Click Scan to list nearby Wi-Fi --</option>
@@ -1023,23 +1033,30 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label for="qs-wifi-ssid">Wi-Fi SSID (Network Name):</label>
-            <input type="text" id="qs-wifi-ssid" placeholder="Enter or select Wi-Fi SSID" />
+          <div class="form-row">
+            <div class="form-group" style="grid-column: span 2;">
+              <label for="qs-wifi-ssid">Wi-Fi SSID (Manual or Scanned):</label>
+              <input type="text" id="qs-wifi-ssid" placeholder="Enter or select Wi-Fi SSID" />
+            </div>
+            <div class="form-group">
+              <label for="qs-wifi-priority">Priority (higher = first):</label>
+              <input type="number" id="qs-wifi-priority" min="0" max="999" value="150" />
+            </div>
           </div>
 
           <div class="form-group">
             <label for="qs-wifi-psk">Wi-Fi Password:</label>
-            <input type="password" id="qs-wifi-psk" placeholder="WPA2/WPA3 Password" autocomplete="new-password" />
+            <input type="password" id="qs-wifi-psk" placeholder="WPA2/WPA3 Password (blank if open)" autocomplete="new-password" />
           </div>
 
-          <div style="margin-top:12px; display:flex; flex-direction:column; gap:8px;">
-            <button type="button" id="btn-qs-wifi-connect" class="btn btn-primary" style="width:100%; justify-content:center;">📶 Connect RPi to This Wi-Fi</button>
-            <button type="button" id="btn-qs-wifi-ap" class="btn btn-sm btn-secondary" style="width:100%; justify-content:center;">📡 Open Hotspot AP (Web51TNC-Setup / 10.42.0.1)</button>
+          <div class="wifi-btn-row">
+            <button type="button" id="btn-qs-wifi-save" class="btn btn-secondary" style="flex:1; justify-content:center;">💾 Save Only (Add)</button>
+            <button type="button" id="btn-qs-wifi-connect" class="btn btn-primary" style="flex:1; justify-content:center;">📶 Save &amp; Connect</button>
           </div>
+          <button type="button" id="btn-qs-wifi-ap" class="btn btn-sm btn-secondary" style="width:100%; justify-content:center;">📡 Open Hotspot AP (Web51TNC-Setup / 10.42.0.1)</button>
 
-          <div class="info-callout" style="margin-top:14px; font-size:0.78rem;">
-            <b>Automatic Field AP Fallback:</b> On boot, if your configured Wi-Fi is not found within 45 seconds, the Raspberry Pi automatically opens Wi-Fi Hotspot <code>Web51TNC-Setup</code> (password: <code>web51tnc</code>) at <code>http://10.42.0.1:8000</code> so you can always connect with your phone or laptop!
+          <div class="info-callout" style="margin-top:2px; font-size:0.78rem;">
+            <b>Automatic Multi-Wi-Fi &amp; AP Fallback:</b> Saved networks are tried automatically in priority order. If none connect within 45s on boot, the Pi opens <code>Web51TNC-Setup</code> (password: <code>web51tnc</code>) at <code>http://10.42.0.1:8000</code>.
           </div>
         </div>
       </div>
@@ -1047,6 +1064,6 @@
   </div>
 
   <script src="/static/vendor/leaflet/leaflet.js"></script>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>

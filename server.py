@@ -94,6 +94,11 @@ class ConnectRequest(BaseModel):
 class WifiConnectRequest(BaseModel):
     ssid: str = Field(..., min_length=1, max_length=64)
     password: str = Field(default="", max_length=128)
+    priority: int = Field(default=150, ge=0, le=999)
+
+
+class WifiDeleteRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
 
 
 class WifiApRequest(BaseModel):
@@ -1626,9 +1631,280 @@ def _connect_wifi_sync(ssid: str, password: str) -> Dict[str, Any]:
     return _query_wifi_status_sync()
 
 
+def _list_saved_wifi_sync() -> List[Dict[str, Any]]:
+    """List saved NetworkManager Wi-Fi client profiles (never exposing PSKs)."""
+    profiles: List[Dict[str, Any]] = []
+    try:
+        res = subprocess.run(
+            [
+                "nmcli",
+                "-t",
+                "-e",
+                "no",
+                "-f",
+                "NAME,TYPE,AUTOCONNECT,AUTOCONNECT-PRIORITY,ACTIVE",
+                "connection",
+                "show",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+        for line in res.stdout.splitlines():
+            parts = line.split(":", 4)
+            if len(parts) < 5:
+                continue
+            name, ctype, autoconn, prio_str, active_str = parts
+            if ctype != "802-11-wireless" or name == "Web51TNC-AP":
+                continue
+            try:
+                prio = int(prio_str)
+            except ValueError:
+                prio = 0
+            ssid_val = name
+            ssid_res = subprocess.run(
+                ["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", name],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                check=False,
+            )
+            if ssid_res.returncode == 0 and ssid_res.stdout.strip():
+                ssid_val = ssid_res.stdout.strip()
+            profiles.append(
+                {
+                    "name": name,
+                    "ssid": ssid_val,
+                    "autoconnect": autoconn == "yes",
+                    "priority": prio,
+                    "active": active_str == "yes",
+                }
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("Failed to list saved Wi-Fi profiles: %s", exc)
+    return sorted(profiles, key=lambda p: (not p["active"], -p["priority"], p["name"]))
+
+
+def _save_wifi_profile_sync(
+    ssid: str, password: str, priority: int = 150
+) -> Dict[str, Any]:
+    """Save or update a NetworkManager Wi-Fi profile without dropping current link."""
+    clean_ssid = ssid.strip()
+    if not clean_ssid:
+        raise ValueError("SSID cannot be empty")
+    if clean_ssid == "Web51TNC-AP":
+        raise ValueError("Cannot overwrite internal hotspot profile")
+
+    exists_res = subprocess.run(
+        ["nmcli", "-t", "-f", "NAME", "connection", "show", clean_ssid],
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+        check=False,
+    )
+    if exists_res.returncode == 0:
+        mod_cmd = [
+            "sudo",
+            "-n",
+            "nmcli",
+            "connection",
+            "modify",
+            clean_ssid,
+            "802-11-wireless.ssid",
+            clean_ssid,
+            "connection.autoconnect",
+            "yes",
+            "connection.autoconnect-priority",
+            str(priority),
+            "802-11-wireless.powersave",
+            "2",
+        ]
+        if password:
+            mod_cmd.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
+        res = subprocess.run(
+            mod_cmd, capture_output=True, text=True, timeout=8.0, check=False
+        )
+    else:
+        add_cmd = [
+            "sudo",
+            "-n",
+            "nmcli",
+            "connection",
+            "add",
+            "type",
+            "wifi",
+            "ifname",
+            "wlan0",
+            "con-name",
+            clean_ssid,
+            "ssid",
+            clean_ssid,
+            "connection.autoconnect",
+            "yes",
+            "connection.autoconnect-priority",
+            str(priority),
+            "802-11-wireless.powersave",
+            "2",
+        ]
+        if password:
+            add_cmd.extend(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password])
+        res = subprocess.run(
+            add_cmd, capture_output=True, text=True, timeout=8.0, check=False
+        )
+
+    if res.returncode != 0:
+        err_msg = (res.stderr or res.stdout or "Failed to save Wi-Fi profile").strip()
+        raise RuntimeError(err_msg)
+    return {
+        "saved": True,
+        "ssid": clean_ssid,
+        "priority": priority,
+        "profiles": _list_saved_wifi_sync(),
+    }
+
+
+def _delete_wifi_profile_sync(name: str) -> Dict[str, Any]:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Profile name cannot be empty")
+    if clean_name == "Web51TNC-AP":
+        raise ValueError("Cannot delete internal hotspot profile")
+    res = subprocess.run(
+        ["sudo", "-n", "nmcli", "connection", "delete", clean_name],
+        capture_output=True,
+        text=True,
+        timeout=8.0,
+        check=False,
+    )
+    if res.returncode != 0:
+        err_msg = (res.stderr or res.stdout or "Failed to delete Wi-Fi profile").strip()
+        raise RuntimeError(err_msg)
+    return {"deleted": clean_name, "profiles": _list_saved_wifi_sync()}
+
+
+def _test_all_saved_wifi_sync() -> Dict[str, Any]:
+    """Scan nearby Wi-Fi and try saved profiles in priority order until one connects."""
+    profiles = _list_saved_wifi_sync()
+    if not profiles:
+        raise ValueError("No saved Wi-Fi profiles to test")
+
+    visible_nets = {n["ssid"] for n in _scan_wifi_sync()}
+    if os.path.exists("/usr/local/sbin/web51tnc-ap-ctl"):
+        subprocess.run(
+            ["sudo", "-n", "/usr/local/sbin/web51tnc-ap-ctl", "stop"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+
+    ordered = sorted(profiles, key=lambda p: (-p["priority"], p["name"]))
+    results: List[Dict[str, Any]] = []
+    connected_ssid = ""
+
+    for prof in ordered:
+        pname = prof["name"]
+        pssid = prof["ssid"]
+        if visible_nets and pssid not in visible_nets:
+            results.append(
+                {
+                    "name": pname,
+                    "ssid": pssid,
+                    "priority": prof["priority"],
+                    "status": "not_in_range",
+                }
+            )
+            continue
+
+        up_res = subprocess.run(
+            ["sudo", "-n", "nmcli", "--wait", "15", "connection", "up", pname],
+            capture_output=True,
+            text=True,
+            timeout=20.0,
+            check=False,
+        )
+        if up_res.returncode == 0:
+            connected_ssid = pssid
+            results.append(
+                {
+                    "name": pname,
+                    "ssid": pssid,
+                    "priority": prof["priority"],
+                    "status": "connected",
+                }
+            )
+            break
+        err = (up_res.stderr or up_res.stdout or "failed").strip()
+        results.append(
+            {
+                "name": pname,
+                "ssid": pssid,
+                "priority": prof["priority"],
+                "status": "failed",
+                "error": err,
+            }
+        )
+
+    if not connected_ssid and os.path.exists("/usr/local/sbin/web51tnc-ap-ctl"):
+        subprocess.run(
+            ["sudo", "-n", "/usr/local/sbin/web51tnc-ap-ctl", "start"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+
+    return {
+        "connected": bool(connected_ssid),
+        "connected_ssid": connected_ssid,
+        "results": results,
+        "wifi": _query_wifi_status_sync(),
+        "profiles": _list_saved_wifi_sync(),
+    }
+
+
 @app.get("/api/wifi/status")
 async def get_wifi_status():
     return await asyncio.to_thread(_query_wifi_status_sync)
+
+
+@app.get("/api/wifi/saved")
+async def list_saved_wifi():
+    profiles = await asyncio.to_thread(_list_saved_wifi_sync)
+    return {"profiles": profiles}
+
+
+@app.post("/api/wifi/save", dependencies=[Depends(verify_api_token)])
+async def save_wifi_profile(req: WifiConnectRequest):
+    try:
+        return await asyncio.to_thread(
+            _save_wifi_profile_sync, req.ssid, req.password, req.priority
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/wifi/delete", dependencies=[Depends(verify_api_token)])
+async def delete_wifi_profile(req: WifiDeleteRequest):
+    try:
+        return await asyncio.to_thread(_delete_wifi_profile_sync, req.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/wifi/test-all", dependencies=[Depends(verify_api_token)])
+async def test_all_saved_wifi():
+    try:
+        return await asyncio.to_thread(_test_all_saved_wifi_sync)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/wifi/scan", dependencies=[Depends(verify_api_token)])
