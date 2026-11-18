@@ -2046,7 +2046,23 @@ function initControls() {
           return;
         }
         if (data.restarting) {
-          showToast(`Updated to v${data.version}! Restarting Web51TNC...`, "success");
+          showToast(`Updated to v${data.version}! Restarting & refreshing...`, "success");
+          btnApplyUpdate.textContent = "⏳ Restarting...";
+          setTimeout(async () => {
+            for (let attempt = 0; attempt < 20; attempt++) {
+              try {
+                const probe = await fetch("/api/state", { cache: "no-store" });
+                if (probe.ok) {
+                  window.location.reload();
+                  return;
+                }
+              } catch (_) {
+                // Server still restarting
+              }
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+            window.location.reload();
+          }, 1500);
         } else {
           showToast("Already up to date.", "info");
           handleUpdateInfo({ update_available: false });
