@@ -360,13 +360,15 @@ step "Staging Web51TNC bundle on bootfs (/boot/firmware/web51tnc-bundle)"
 rm -rf "$WORK/web51tnc-bundle"
 mkdir -p "$WORK/web51tnc-bundle"
 rsync -a \
-    --exclude=".git" \
     --exclude="rpi/build" \
     --exclude="__pycache__" \
     --exclude=".pytest_cache" \
     --exclude=".ruff_cache" \
     --exclude="docs/*.pdf" \
     "$REPO_ROOT/" "$WORK/web51tnc-bundle/"
+if [[ -d "$WORK/web51tnc-bundle/.git" ]] && command -v git >/dev/null 2>&1; then
+    git -C "$WORK/web51tnc-bundle" remote set-url origin https://github.com/oh2fxd/web51tnc.git 2>/dev/null || true
+fi
 mcopy -o -s -i "$FAT_SPEC" "$WORK/web51tnc-bundle" ::/ \
     || die "Failed to copy bundle to bootfs"
 info "bundle staged ($(du -sh "$WORK/web51tnc-bundle" | cut -f1))"
