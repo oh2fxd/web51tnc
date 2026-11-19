@@ -1403,6 +1403,11 @@ tnc = TNCManager()
 async def lifespan(app: FastAPI):
     reconnect_task = asyncio.create_task(tnc.auto_reconnect_loop())
     update_task = asyncio.create_task(tnc.auto_update_check_loop())
+    if os.path.exists("/etc/systemd/system/web51tnc.service") and (
+        not shutil.which("btmgmt")
+        or not os.path.exists("/etc/systemd/system/web51tnc-bt-beacon.timer")
+    ):
+        asyncio.create_task(asyncio.to_thread(tnc._sync_rpi_appliance_units_sync))
     yield
     reconnect_task.cancel()
     update_task.cancel()
@@ -2004,6 +2009,51 @@ def _test_all_saved_wifi_sync() -> Dict[str, Any]:
 @app.get("/api/wifi/status")
 async def get_wifi_status():
     return await asyncio.to_thread(_query_wifi_status_sync)
+
+
+@app.get("/api/bt/status")
+async def get_bt_status():
+    def _bt_info() -> Dict[str, Any]:
+        btmgmt_path = shutil.which("btmgmt")
+        last_label = ""
+        if os.path.isfile("/run/web51tnc-bt-beacon.last"):
+            try:
+                with open("/run/web51tnc-bt-beacon.last", "r", encoding="utf-8") as f:
+                    last_label = f.read().strip()
+            except OSError:
+                pass
+        bt_svc = subprocess.run(
+            ["systemctl", "is-active", "bluetooth"],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout.strip()
+        tmr_svc = subprocess.run(
+            ["systemctl", "is-active", "web51tnc-bt-beacon.timer"],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
+        ).stdout.strip()
+        hci_out = ""
+        if btmgmt_path:
+            hci_out = subprocess.run(
+                ["sudo", "-n", "btmgmt", "info"],
+                capture_output=True,
+                text=True,
+                timeout=4.0,
+                check=False,
+            ).stdout.strip()
+        return {
+            "btmgmt_installed": bool(btmgmt_path),
+            "bluetooth_service": bt_svc,
+            "beacon_timer": tmr_svc,
+            "last_label": last_label,
+            "btmgmt_info": hci_out[:600],
+        }
+
+    return await asyncio.to_thread(_bt_info)
 
 
 @app.get("/api/wifi/saved")

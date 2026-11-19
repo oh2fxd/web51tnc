@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "web51tnc"
-version = "1.3.6"
+version = "1.3.7"
 description = "Modern Web UI & APRS Gateway Controller for NET-51TNC hardware TNC/iGate"
 readme = "README.md"
 authors = [
