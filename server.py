@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -1273,6 +1274,33 @@ class TNCManager:
             bt_svc = os.path.join(rpi_dir, "web51tnc-bt-beacon.service")
             bt_tmr = os.path.join(rpi_dir, "web51tnc-bt-beacon.timer")
             if os.path.isfile(bt_src):
+                if not shutil.which("btmgmt"):
+                    subprocess.run(
+                        ["sudo", "-n", "apt-get", "update", "-qq"],
+                        capture_output=True,
+                        timeout=30.0,
+                        check=False,
+                    )
+                    subprocess.run(
+                        [
+                            "sudo",
+                            "-n",
+                            "apt-get",
+                            "install",
+                            "-y",
+                            "--no-install-recommends",
+                            "bluez",
+                        ],
+                        capture_output=True,
+                        timeout=60.0,
+                        check=False,
+                    )
+                subprocess.run(
+                    ["sudo", "-n", "systemctl", "enable", "--now", "bluetooth"],
+                    capture_output=True,
+                    timeout=8.0,
+                    check=False,
+                )
                 subprocess.run(
                     [
                         "sudo",

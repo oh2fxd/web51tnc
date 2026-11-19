@@ -39,21 +39,23 @@ fi
 # Max 26 chars so 020106 (3B) + len+0x09 (2B) + name (<=26B) <= 31B BLE ADV limit
 LABEL="${LABEL:0:26}"
 
-if [[ -f "$STATE_FILE" ]] && [[ "$(cat "$STATE_FILE" 2>/dev/null)" == "$LABEL" ]]; then
-    exit 0
-fi
-
 command -v btmgmt >/dev/null 2>&1 || exit 0
 rfkill unblock bluetooth 2>/dev/null || true
 
+if [[ -f "$STATE_FILE" ]] && [[ "$(cat "$STATE_FILE" 2>/dev/null)" == "$LABEL" ]]; then
+    # Keep Classic BT discoverable (BlueZ default discov timeout is 180s)
+    btmgmt discov on >/dev/null 2>&1 || true
+    exit 0
+fi
+
 # Ensure controller is powered, non-connectable, non-pairable, discoverable
 btmgmt power on >/dev/null 2>&1 || true
+btmgmt le on >/dev/null 2>&1 || true
 btmgmt connectable off >/dev/null 2>&1 || true
 btmgmt pairable off >/dev/null 2>&1 || true
 btmgmt bondable off >/dev/null 2>&1 || true
 btmgmt name "$LABEL" >/dev/null 2>&1 || true
 btmgmt discov on >/dev/null 2>&1 || true
-btmgmt le on >/dev/null 2>&1 || true
 
 # Build non-connectable BLE advertising payload:
 #   Flags: 02 01 06 (LE General Discoverable, BR/EDR Not Supported)
