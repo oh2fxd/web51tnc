@@ -1226,6 +1226,7 @@ class TNCManager:
         already_up_to_date = "Already up to date" in out
         new_ver = self._get_local_version()
         if not already_up_to_date:
+            await asyncio.to_thread(self._sync_rpi_appliance_units_sync)
             asyncio.create_task(self._restart_after_delay(0.8))
 
         return {
@@ -1234,6 +1235,111 @@ class TNCManager:
             "version": new_ver,
             "output": out,
         }
+
+    def _sync_rpi_appliance_units_sync(self) -> None:
+        """Best-effort sync of RPi helper scripts and systemd units on OTA update."""
+        if not os.path.exists("/etc/systemd/system/web51tnc.service"):
+            return
+        try:
+            chk = subprocess.run(
+                ["sudo", "-n", "true"],
+                capture_output=True,
+                timeout=3.0,
+                check=False,
+            )
+            if chk.returncode != 0:
+                return
+            rpi_dir = os.path.join(APP_DIR, "rpi")
+            ap_src = os.path.join(rpi_dir, "web51tnc-ap-ctl.sh")
+            if os.path.isfile(ap_src):
+                subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "install",
+                        "-m",
+                        "0755",
+                        ap_src,
+                        "/usr/local/sbin/web51tnc-ap-ctl",
+                    ],
+                    capture_output=True,
+                    timeout=5.0,
+                    check=False,
+                )
+            bt_src = os.path.join(rpi_dir, "web51tnc-bt-beacon.sh")
+            bt_svc = os.path.join(rpi_dir, "web51tnc-bt-beacon.service")
+            bt_tmr = os.path.join(rpi_dir, "web51tnc-bt-beacon.timer")
+            if os.path.isfile(bt_src):
+                subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "install",
+                        "-m",
+                        "0755",
+                        bt_src,
+                        "/usr/local/sbin/web51tnc-bt-beacon",
+                    ],
+                    capture_output=True,
+                    timeout=5.0,
+                    check=False,
+                )
+            if os.path.isfile(bt_svc) and os.path.isfile(bt_tmr):
+                subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "install",
+                        "-m",
+                        "0644",
+                        bt_svc,
+                        "/etc/systemd/system/web51tnc-bt-beacon.service",
+                    ],
+                    capture_output=True,
+                    timeout=5.0,
+                    check=False,
+                )
+                subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "install",
+                        "-m",
+                        "0644",
+                        bt_tmr,
+                        "/etc/systemd/system/web51tnc-bt-beacon.timer",
+                    ],
+                    capture_output=True,
+                    timeout=5.0,
+                    check=False,
+                )
+                subprocess.run(
+                    ["sudo", "-n", "systemctl", "daemon-reload"],
+                    capture_output=True,
+                    timeout=8.0,
+                    check=False,
+                )
+                subprocess.run(
+                    [
+                        "sudo",
+                        "-n",
+                        "systemctl",
+                        "enable",
+                        "--now",
+                        "web51tnc-bt-beacon.timer",
+                    ],
+                    capture_output=True,
+                    timeout=8.0,
+                    check=False,
+                )
+                subprocess.run(
+                    ["sudo", "-n", "/usr/local/sbin/web51tnc-bt-beacon"],
+                    capture_output=True,
+                    timeout=8.0,
+                    check=False,
+                )
+        except (OSError, subprocess.SubprocessError) as ex:
+            logger.warning("RPi unit sync warning during OTA update: %s", ex)
 
     async def _restart_after_delay(self, delay_sec: float = 0.8):
         await asyncio.sleep(delay_sec)
