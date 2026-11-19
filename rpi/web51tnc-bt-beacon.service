@@ -1,0 +1,8 @@
+[Unit]
+Description=Web51TNC Non-Connectable Bluetooth IP Beacon
+After=bluetooth.service network.target
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/web51tnc-bt-beacon

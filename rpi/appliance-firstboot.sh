@@ -220,11 +220,21 @@ else
         systemctl daemon-reload
         systemctl enable web51tnc-wifi-fallback.service >/dev/null 2>&1 || true
     fi
+    if [[ -f "$APP_DIR/rpi/web51tnc-bt-beacon.sh" ]]; then
+        install -m 0755 "$APP_DIR/rpi/web51tnc-bt-beacon.sh" /usr/local/sbin/web51tnc-bt-beacon
+    fi
+    if [[ -f "$APP_DIR/rpi/web51tnc-bt-beacon.service" && -f "$APP_DIR/rpi/web51tnc-bt-beacon.timer" ]]; then
+        install -m 0644 "$APP_DIR/rpi/web51tnc-bt-beacon.service" /etc/systemd/system/web51tnc-bt-beacon.service
+        install -m 0644 "$APP_DIR/rpi/web51tnc-bt-beacon.timer" /etc/systemd/system/web51tnc-bt-beacon.timer
+        systemctl daemon-reload
+        systemctl enable --now web51tnc-bt-beacon.timer >/dev/null 2>&1 || true
+        /usr/local/sbin/web51tnc-bt-beacon >/dev/null 2>&1 || true
+    fi
 
     if [[ "$ONLINE" == true ]]; then
         apt-get update -qq >/dev/null 2>&1 || log "WARN: apt-get update failed"
-        apt-get install -y --no-install-recommends python3-pip rsync git >/dev/null 2>&1 \
-            || log "WARN: python3-pip/rsync/git install failed"
+        apt-get install -y --no-install-recommends python3-pip rsync git bluez >/dev/null 2>&1 \
+            || log "WARN: python3-pip/rsync/git/bluez install failed"
 
         if { sudo -u "$APP_USER" python3 -m pip install --quiet --break-system-packages \
                 -r "$APP_DIR/requirements.txt"; } >>"$STATUS" 2>&1; then
