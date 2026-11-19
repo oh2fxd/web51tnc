@@ -42,20 +42,33 @@ LABEL="${LABEL:0:26}"
 command -v btmgmt >/dev/null 2>&1 || exit 0
 rfkill unblock bluetooth 2>/dev/null || true
 
+if ! compgen -G "/sys/class/bluetooth/hci*" >/dev/null; then
+    logger -t web51tnc-bt "No Bluetooth controller found in /sys/class/bluetooth" 2>/dev/null || true
+    exit 0
+fi
+
+# Ensure bluetoothd adapter properties (permanent discoverable, non-pairable)
+if command -v busctl >/dev/null 2>&1; then
+    timeout 3 busctl set-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Powered b true </dev/null >/dev/null 2>&1 || true
+    timeout 3 busctl set-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Pairable b false </dev/null >/dev/null 2>&1 || true
+    timeout 3 busctl set-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 DiscoverableTimeout u 0 </dev/null >/dev/null 2>&1 || true
+    timeout 3 busctl set-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Alias s "$LABEL" </dev/null >/dev/null 2>&1 || true
+    timeout 3 busctl set-property org.bluez /org/bluez/hci0 org.bluez.Adapter1 Discoverable b true </dev/null >/dev/null 2>&1 || true
+fi
+
 if [[ -f "$STATE_FILE" ]] && [[ "$(cat "$STATE_FILE" 2>/dev/null)" == "$LABEL" ]]; then
-    # Keep Classic BT discoverable (BlueZ default discov timeout is 180s)
-    btmgmt discov on >/dev/null 2>&1 || true
+    timeout 3 btmgmt discov on </dev/null >/dev/null 2>&1 || true
     exit 0
 fi
 
 # Ensure controller is powered, non-connectable, non-pairable, discoverable
-btmgmt power on >/dev/null 2>&1 || true
-btmgmt le on >/dev/null 2>&1 || true
-btmgmt connectable off >/dev/null 2>&1 || true
-btmgmt pairable off >/dev/null 2>&1 || true
-btmgmt bondable off >/dev/null 2>&1 || true
-btmgmt name "$LABEL" >/dev/null 2>&1 || true
-btmgmt discov on >/dev/null 2>&1 || true
+timeout 3 btmgmt power on </dev/null >/dev/null 2>&1 || true
+timeout 3 btmgmt le on </dev/null >/dev/null 2>&1 || true
+timeout 3 btmgmt connectable off </dev/null >/dev/null 2>&1 || true
+timeout 3 btmgmt pairable off </dev/null >/dev/null 2>&1 || true
+timeout 3 btmgmt bondable off </dev/null >/dev/null 2>&1 || true
+timeout 3 btmgmt name "$LABEL" </dev/null >/dev/null 2>&1 || true
+timeout 3 btmgmt discov on </dev/null >/dev/null 2>&1 || true
 
 # Build non-connectable BLE advertising payload:
 #   Flags: 02 01 06 (LE General Discoverable, BR/EDR Not Supported)
@@ -65,9 +78,9 @@ NAME_LEN=$(( ${#LABEL} + 1 ))
 LEN_HEX="$(printf '%02x' "$NAME_LEN")"
 ADV_HEX="020106${LEN_HEX}09${NAME_HEX}"
 
-btmgmt rm-adv 1 >/dev/null 2>&1 || true
+timeout 3 btmgmt rm-adv 1 </dev/null >/dev/null 2>&1 || true
 # Note: omit -c so BLE advertisement is strictly non-connectable
-btmgmt add-adv -g -d "$ADV_HEX" 1 >/dev/null 2>&1 || true
+timeout 3 btmgmt add-adv -g -d "$ADV_HEX" 1 </dev/null >/dev/null 2>&1 || true
 
 printf '%s' "$LABEL" > "$STATE_FILE" 2>/dev/null || true
 logger -t web51tnc-bt "Advertising non-connectable BT beacon: ${LABEL}" 2>/dev/null || true

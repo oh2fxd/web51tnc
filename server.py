@@ -2026,12 +2026,22 @@ async def get_bt_status():
             def _run_short(cmd: List[str], t: float = 5.0) -> str:
                 try:
                     r = subprocess.run(
-                        cmd, capture_output=True, text=True, timeout=t, check=False
+                        cmd,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        timeout=t,
+                        check=False,
                     )
                     return (r.stdout or r.stderr or "").strip()
                 except (OSError, subprocess.SubprocessError) as exc:
                     return f"ERR: {exc}"
 
+            sys_bt = (
+                os.listdir("/sys/class/bluetooth")
+                if os.path.isdir("/sys/class/bluetooth")
+                else []
+            )
             bt_svc = _run_short(["systemctl", "is-active", "bluetooth"])
             tmr_svc = _run_short(["systemctl", "is-active", "web51tnc-bt-beacon.timer"])
             hci_out = (
@@ -2042,6 +2052,7 @@ async def get_bt_status():
             return {
                 "btmgmt_installed": bool(btmgmt_path),
                 "btmgmt_path": btmgmt_path,
+                "sys_class_bluetooth": sys_bt,
                 "bluetooth_service": bt_svc,
                 "beacon_timer": tmr_svc,
                 "last_label": last_label,
