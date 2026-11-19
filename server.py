@@ -1225,8 +1225,11 @@ class TNCManager:
 
         already_up_to_date = "Already up to date" in out
         new_ver = self._get_local_version()
-        if not already_up_to_date:
+        if not already_up_to_date or not os.path.exists(
+            "/etc/systemd/system/web51tnc-bt-beacon.timer"
+        ):
             await asyncio.to_thread(self._sync_rpi_appliance_units_sync)
+        if not already_up_to_date:
             asyncio.create_task(self._restart_after_delay(0.8))
 
         return {
