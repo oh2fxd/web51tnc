@@ -34,8 +34,10 @@ It completely replaces the legacy Windows .NET configuration software with a cro
   * Configures **Callsign**, **Auto-Calculated APRS-IS Passcode**, **SSID Role Flag (`-7` Handheld, `-9` Mobile, `-10` iGate, `-13` Weather, `-5` Home)**, **Visual APRS Icon**, **Coordinates**, and **Raspberry Pi Wi-Fi Uplink** in one screen.
 * 📡 **Automatic Field Wi-Fi Hotspot AP Fallback (`Web51TNC-Setup`)**:
   * On boot, `web51tnc-wifi-fallback.service` waits up to 45 seconds for a known Wi-Fi network. If none is in range, the Raspberry Pi automatically opens a WPA2 Hotspot AP **`Web51TNC-Setup`** (password: `web51tnc`) at **`http://10.42.0.1:8000`** (`http://web51tnc.local:8000`).
+* 🔵 **Non-Connectable Bluetooth IP:Port Beacon (`web51tnc-bt-beacon`)**:
+  * Advertises **`51TNC <IP>:8000`** (non-pairable, non-connectable) over Bluetooth so users on networks where `.local` mDNS does not resolve can read the dashboard IP and port from any phone or laptop Bluetooth scan.
 * 💾 **Zero Flash-Wear Architecture**:
-  * Live heard stations and tracks are persisted in RAM (`/dev/shm/web51tnc_stations.json` on `tmpfs`), and EEPROM backups on disk are only written when the 512-byte configuration actually changes — protecting SD cards and USB sticks during 24/7 operation.
+  * Live heard stations and tracks are persisted in RAM (`/dev/shm/web51tnc_stations.json` on `tmpfs`), `systemd-journald` uses volatile RAM storage (`32M` cap), and EEPROM backups on disk are only written when the 512-byte configuration actually changes — protecting SD cards and USB sticks during 24/7 operation.
 * ⚙️ **Full 512-Byte Hardware EEPROM Configuration**:
   * Complete support for Station Identity, Ethernet IP/Mask/Gateway, APRS-IS Servers (`rotate` / `always_a`), 20-tile visual APRS icon selector, Radio Modem (PTT delay, TX level, 1200/9600 modes), Digipeater (`WIDE1-1` / `WIDE2-2`), Weather Beacon, and GPS IO2 Tracker.
   * Reliable W5100/8051 EEPROM write cycle (holds TCP socket open during MCU flash before reboot supervision).
@@ -73,6 +75,7 @@ It completely replaces the legacy Windows .NET configuration software with a cro
 | `web51tnc-dhcp.service` | `dnsmasq` DHCP server bound strictly to `eth0` (`192.168.1.50–.110`, router `.1`) |
 | `web51tnc-nat.service` | `nftables` IPv4 masquerade routing `192.168.1.0/24` (`eth0`) through `wlan0` |
 | `web51tnc-wifi-fallback.service` | Boot watchdog (`/usr/local/sbin/web51tnc-ap-ctl`) that starts Hotspot AP `Web51TNC-Setup` (`10.42.0.1`) if no client Wi-Fi connects within 45s |
+| `web51tnc-bt-beacon.timer` | Refreshes the non-connectable Bluetooth `51TNC <IP>:8000` beacon every 30s (`/usr/local/sbin/web51tnc-bt-beacon`) |
 | `web51tnc-firstboot.service` | One-shot first-boot provisioner (`/usr/local/sbin/web51tnc-firstboot.sh`), logs progress to `/boot/firmware/STATUS.TXT` |
 
 See [HARDWARE_SETUP.md](HARDWARE_SETUP.md) for full wiring pinouts and radio settings.
